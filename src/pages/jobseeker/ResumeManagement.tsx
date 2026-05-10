@@ -57,12 +57,55 @@ const DEFAULT_RADAR_DATA = [
 ];
 
 const DEFAULT_TREE = {
-  name: '技术能力',
+  name: '互联网/科技综合能力',
   children: [
-    { name: '编程语言', children: [{ name: 'Python', value: 80 }, { name: 'Java', value: 65 }, { name: 'JavaScript', value: 75 }] },
-    { name: '框架工具', children: [{ name: 'React', value: 70 }, { name: 'FastAPI', value: 60 }] },
-    { name: '数据库', children: [{ name: 'MySQL', value: 72 }, { name: 'Redis', value: 55 }] },
-  ]
+    {
+      name: '编程语言',
+      children: [
+        { name: 'JavaScript', value: 75 },
+        { name: 'TypeScript', value: 70 },
+        { name: 'Python', value: 80 },
+        { name: 'Java', value: 65 },
+        { name: 'Go', value: 50 },
+      ],
+    },
+    {
+      name: '前端技术',
+      children: [
+        { name: 'React', value: 78 },
+        { name: 'Vue', value: 65 },
+        { name: 'CSS/Tailwind', value: 72 },
+        { name: '性能优化', value: 60 },
+      ],
+    },
+    {
+      name: '后端与架构',
+      children: [
+        { name: 'Node.js', value: 68 },
+        { name: 'Spring Boot', value: 62 },
+        { name: '微服务', value: 55 },
+        { name: 'RESTful API', value: 75 },
+      ],
+    },
+    {
+      name: '数据与AI',
+      children: [
+        { name: 'MySQL', value: 72 },
+        { name: 'Redis', value: 60 },
+        { name: '机器学习', value: 55 },
+        { name: '数据分析', value: 65 },
+      ],
+    },
+    {
+      name: '工程与运维',
+      children: [
+        { name: 'Git', value: 85 },
+        { name: 'Docker', value: 63 },
+        { name: 'CI/CD', value: 58 },
+        { name: 'Linux', value: 70 },
+      ],
+    },
+  ],
 };
 
 export default function ResumeManagement() {

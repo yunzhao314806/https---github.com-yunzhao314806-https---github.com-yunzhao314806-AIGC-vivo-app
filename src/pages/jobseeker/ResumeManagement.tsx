@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/db/supabase';
-import { Resume, CapabilityData, IndustryTemplate } from '@/types/types';
+import { Resume, CapabilityData, IndustryTemplate, TreeNode } from '@/types/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -20,12 +20,14 @@ import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CapabilityRadarChart } from '@/components/charts/CapabilityRadarChart';
 import { CapabilityTreeImage } from '@/components/charts/CapabilityTreeImage';
+import { CapabilityTreeChart } from '@/components/charts/CapabilityTreeChart';
 import { ResumeUploader } from '@/components/resume/ResumeUploader';
 import {
   FileText, Plus, Trash2, Star, Upload, RefreshCw,
-  Download, FileType, File
+  Download, FileType, File, Sparkles, Loader2, BrainCircuit
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { createParser } from 'eventsource-parser';
 
 // 文件格式图标颜色映射
 const FILE_TYPE_COLOR: Record<string, string> = {
@@ -70,11 +72,16 @@ export default function ResumeManagement() {
   const [templates, setTemplates] = useState<IndustryTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [radarData, setRadarData] = useState(DEFAULT_RADAR_DATA);
+  const [treeDataEditable, setTreeDataEditable] = useState<TreeNode>(DEFAULT_TREE);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [newResumeTitle, setNewResumeTitle] = useState('');
   const [selectedIndustry, setSelectedIndustry] = useState('tech');
-  // 当前正在上传文件的简历 ID
   const [uploadingResumeId, setUploadingResumeId] = useState<string | null>(null);
+
+  // AI 解析简历状态
+  const [aiParsing, setAiParsing] = useState(false);
+  const [aiParseProgress, setAiParseProgress] = useState('');
+  const aiAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (user) {
@@ -105,6 +112,9 @@ export default function ResumeManagement() {
       const rd = data.radar_data as Record<string, number>;
       if (rd && Object.keys(rd).length > 0) {
         setRadarData(Object.entries(rd).map(([subject, value]) => ({ subject, value })));
+      }
+      if (data.tree_data && Object.keys(data.tree_data).length > 0) {
+        setTreeDataEditable(data.tree_data as TreeNode);
       }
     }
   };
@@ -198,18 +208,20 @@ export default function ResumeManagement() {
     radarData.forEach(item => { radarObj[item.subject] = item.value; });
 
     const currentTemplate = templates.find(t => t.industry === selectedIndustry);
-    const treeData = currentTemplate ? currentTemplate.skill_tree : DEFAULT_TREE;
+    const treeToSave = (treeDataEditable && Object.keys(treeDataEditable).length > 0)
+      ? treeDataEditable
+      : currentTemplate?.skill_tree ?? DEFAULT_TREE;
 
     if (capability) {
       await supabase.from('capability_data')
-        .update({ radar_data: radarObj, tree_data: treeData, industry: selectedIndustry })
+        .update({ radar_data: radarObj, tree_data: treeToSave, industry: selectedIndustry })
         .eq('id', capability.id);
     } else {
       await supabase.from('capability_data').insert({
         profile_id: user!.id,
         industry: selectedIndustry,
         radar_data: radarObj,
-        tree_data: treeData,
+        tree_data: treeToSave,
         skills: radarData.map(r => ({ name: r.subject, level: r.value })),
       });
     }
@@ -217,10 +229,130 @@ export default function ResumeManagement() {
     fetchCapabilityData();
   };
 
+  // AI 解析简历 → 生成能力图谱
+  const handleAiParseResume = async () => {
+    // 找主简历或第一份有内容的简历
+    const targetResume = resumes.find(r => r.is_primary) ?? resumes[0];
+    if (!targetResume) {
+      toast.info('请先创建简历再使用 AI 解析');
+      return;
+    }
+
+    // 构建简历文本（从结构化字段拼接）
+    let resumeText = '';
+    if (targetResume.parsed_content) {
+      resumeText = targetResume.parsed_content;
+    } else {
+      // 从结构化数据生成文本
+      const parts: string[] = [`简历标题：${targetResume.title}`];
+      if (targetResume.summary) parts.push(`个人简介：${targetResume.summary}`);
+      if (Array.isArray(targetResume.education) && targetResume.education.length > 0) {
+        parts.push('教育经历：' + targetResume.education.map(e =>
+          `${e.school} ${e.degree} ${e.major} (${e.start_year}-${e.end_year})`
+        ).join('；'));
+      }
+      if (Array.isArray(targetResume.experience) && targetResume.experience.length > 0) {
+        parts.push('工作经历：' + targetResume.experience.map(e =>
+          `${e.company} ${e.title}：${e.description} (${e.start_date}-${e.end_date})`
+        ).join('；'));
+      }
+      if (Array.isArray(targetResume.skills) && targetResume.skills.length > 0) {
+        parts.push('技能：' + targetResume.skills.map(s => `${s.name}(${s.level})`).join('、'));
+      }
+      resumeText = parts.join('\n');
+    }
+
+    if (!resumeText.trim() || resumeText === `简历标题：${targetResume.title}`) {
+      toast.info('简历内容暂为空，请先填写工作经历、技能或上传文件后再 AI 解析');
+      return;
+    }
+
+    setAiParsing(true);
+    setAiParseProgress('');
+    aiAbortRef.current?.abort();
+    aiAbortRef.current = new AbortController();
+
+    const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+    const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+    let fullText = '';
+    try {
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/parse-resume-capability`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'apikey': SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({ resume_text: resumeText, resume_title: targetResume.title }),
+        signal: aiAbortRef.current.signal,
+      });
+
+      if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      const parser = createParser({
+        onEvent: (event) => {
+          if (event.data === '[DONE]') return;
+          try {
+            const parsed = JSON.parse(event.data);
+            const chunk = parsed.choices?.[0]?.delta?.content ?? '';
+            if (chunk) {
+              fullText += chunk;
+              setAiParseProgress(fullText);
+            }
+          } catch { /* skip */ }
+        },
+      });
+
+      const read = async (): Promise<void> => {
+        const { done, value } = await reader.read();
+        if (done) return;
+        parser.feed(decoder.decode(value, { stream: true }));
+        return read();
+      };
+      await read();
+
+      // 提取 JSON
+      const jsonMatch = fullText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('AI 返回内容格式错误');
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      // 更新雷达图数据
+      if (parsed.radar_data && typeof parsed.radar_data === 'object') {
+        const newRadar = Object.entries(parsed.radar_data as Record<string, number>)
+          .map(([subject, value]) => ({ subject, value: Math.max(0, Math.min(100, Math.round(value))) }));
+        if (newRadar.length > 0) setRadarData(newRadar);
+      }
+
+      // 更新能力树数据
+      if (parsed.tree_data && typeof parsed.tree_data === 'object') {
+        setTreeDataEditable(parsed.tree_data as TreeNode);
+      }
+
+      // 更新行业
+      if (parsed.industry) setSelectedIndustry(parsed.industry);
+
+      setAiParseProgress('');
+      toast.success('AI 能力图谱已生成，点击"保存图谱"持久化数据');
+    } catch (err: unknown) {
+      if ((err as Error).name !== 'AbortError') {
+        console.error('AI 解析失败:', err);
+        toast.error('AI 解析失败，请稍后重试');
+      }
+      setAiParseProgress('');
+    } finally {
+      setAiParsing(false);
+    }
+  };
+
   const currentTemplate = templates.find(t => t.industry === selectedIndustry);
-  const treeData = (capability?.tree_data && Object.keys(capability.tree_data).length > 0)
-    ? capability.tree_data
-    : currentTemplate?.skill_tree || DEFAULT_TREE;
+  const treeData = (treeDataEditable && Object.keys(treeDataEditable).length > 0)
+    ? treeDataEditable
+    : (capability?.tree_data && Object.keys(capability.tree_data).length > 0)
+      ? capability.tree_data
+      : currentTemplate?.skill_tree ?? DEFAULT_TREE;
 
   return (
     <div className="max-w-5xl mx-auto px-4 md:px-8 py-6 space-y-6">
@@ -441,8 +573,11 @@ export default function ResumeManagement() {
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            <CardTitle className="text-base">能力图谱</CardTitle>
-            <div className="flex items-center gap-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <BrainCircuit className="w-4 h-4 text-primary" />
+              能力图谱
+            </CardTitle>
+            <div className="flex items-center gap-2 flex-wrap">
               <select
                 value={selectedIndustry}
                 onChange={e => setSelectedIndustry(e.target.value)}
@@ -452,44 +587,68 @@ export default function ResumeManagement() {
                   <option key={t.industry} value={t.industry}>{t.label}</option>
                 ))}
               </select>
-              <Button size="sm" variant="outline" onClick={handleSaveCapability}>
-                <RefreshCw className="w-3.5 h-3.5 mr-1.5" />保存
+              {/* AI 解析按钮 */}
+              <Button
+                size="sm"
+                variant="default"
+                disabled={aiParsing || resumes.length === 0}
+                onClick={handleAiParseResume}
+                className="h-8"
+              >
+                {aiParsing
+                  ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />解析中…</>
+                  : <><Sparkles className="w-3.5 h-3.5 mr-1.5" />AI 解析简历</>
+                }
+              </Button>
+              <Button size="sm" variant="outline" onClick={handleSaveCapability} className="h-8">
+                <RefreshCw className="w-3.5 h-3.5 mr-1.5" />保存图谱
               </Button>
             </div>
           </div>
+
+          {/* AI 解析进度 */}
+          {aiParsing && (
+            <div className="mt-3 p-3 bg-primary/5 border border-primary/20 rounded-md">
+              <div className="flex items-center gap-2 mb-1.5">
+                <Loader2 className="w-3.5 h-3.5 text-primary animate-spin shrink-0" />
+                <span className="text-xs font-medium text-primary">AI 正在解析简历并生成能力图谱…</span>
+              </div>
+              {aiParseProgress && (
+                <p className="text-xs text-muted-foreground line-clamp-3 font-mono leading-relaxed">
+                  {aiParseProgress.slice(-200)}
+                </p>
+              )}
+            </div>
+          )}
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="radar">
             <TabsList className="mb-4">
-              <TabsTrigger value="radar">雷达图</TabsTrigger>
-              <TabsTrigger value="tree">能力树</TabsTrigger>
-              <TabsTrigger value="simulate">能力模拟</TabsTrigger>
+              <TabsTrigger value="radar">雷达图（可拖拽）</TabsTrigger>
+              <TabsTrigger value="tree">能力树（可拖拽）</TabsTrigger>
+              <TabsTrigger value="overview">全览</TabsTrigger>
             </TabsList>
 
+            {/* 雷达图 Tab — 直接可拖拽 */}
             <TabsContent value="radar">
-              <CapabilityRadarChart data={radarData} height={300} />
-            </TabsContent>
-
-            <TabsContent value="tree">
-              <div className="rounded-lg border border-border overflow-hidden">
-                <CapabilityTreeImage data={treeData} />
-              </div>
-              <p className="text-xs text-muted-foreground mt-2 text-pretty">
-                节点颜色深浅代表能力层级，叶节点底部进度条表示掌握程度（0–100）
+              <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-full bg-primary shrink-0" />
+                拖拽雷达图上的蓝色圆点即可直接调整能力值，完成后点击"保存图谱"
               </p>
-            </TabsContent>
-
-            <TabsContent value="simulate">
-              <p className="text-sm text-muted-foreground mb-4 text-pretty">
-                拖动滑块模拟能力值变化，查看对岗位匹配度的影响
-              </p>
-              <div className="space-y-5">
+              <CapabilityRadarChart
+                data={radarData}
+                height={300}
+                editable
+                onChange={setRadarData}
+              />
+              {/* 滑块辅助 */}
+              <div className="mt-5 space-y-3 border-t border-border pt-4">
+                <p className="text-xs text-muted-foreground">也可通过滑块精确调整：</p>
                 {radarData.map((item, idx) => (
-                  <div key={item.subject} className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-sm font-normal">{item.subject}</Label>
-                      <span className="text-sm font-medium text-primary w-8 text-right">{item.value}</span>
-                    </div>
+                  <div key={item.subject} className="flex items-center gap-3">
+                    <Label className="text-xs font-normal text-muted-foreground w-20 shrink-0 truncate">
+                      {item.subject}
+                    </Label>
                     <Slider
                       value={[item.value]}
                       onValueChange={([v]) => {
@@ -497,20 +656,53 @@ export default function ResumeManagement() {
                         updated[idx] = { ...item, value: v };
                         setRadarData(updated);
                       }}
-                      min={0}
-                      max={100}
-                      step={5}
-                      className="w-full"
+                      min={0} max={100} step={1}
+                      className="flex-1"
                     />
+                    <span className="text-xs font-medium text-primary w-7 text-right tabular-nums shrink-0">
+                      {item.value}
+                    </span>
                   </div>
                 ))}
               </div>
-              <div className="mt-6 p-4 bg-primary/5 rounded-md border border-primary/20">
-                <p className="text-sm font-medium text-primary">综合匹配度预测</p>
-                <p className="text-2xl font-bold text-primary mt-1">
-                  {Math.round(radarData.reduce((s, i) => s + i.value, 0) / radarData.length)}%
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">基于当前能力值估算</p>
+            </TabsContent>
+
+            {/* 能力树 Tab — 叶节点可拖拽 */}
+            <TabsContent value="tree">
+              <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-full bg-primary shrink-0" />
+                拖拽叶节点的进度条可调整技能熟练度，完成后点击"保存图谱"
+              </p>
+              <CapabilityTreeChart
+                data={treeData}
+                editable
+                onChange={updated => setTreeDataEditable(updated)}
+              />
+            </TabsContent>
+
+            {/* 全览 Tab — 只读 SVG 树 */}
+            <TabsContent value="overview">
+              <div className="rounded-lg border border-border overflow-hidden">
+                <CapabilityTreeImage data={treeData} />
+              </div>
+              <p className="text-xs text-muted-foreground mt-2 text-pretty">
+                节点颜色深浅代表能力层级，叶节点底部进度条表示掌握程度（0–100）
+              </p>
+              {/* 综合分 */}
+              <div className="mt-4 p-4 bg-primary/5 rounded-md border border-primary/20 flex items-center gap-4">
+                <div>
+                  <p className="text-xs text-muted-foreground">综合能力均分</p>
+                  <p className="text-2xl font-bold text-primary mt-0.5">
+                    {Math.round(radarData.reduce((s, i) => s + i.value, 0) / Math.max(radarData.length, 1))}
+                  </p>
+                </div>
+                <div className="flex-1 flex flex-wrap gap-2">
+                  {radarData.map(d => (
+                    <span key={d.subject} className="text-xs bg-background border border-border rounded-md px-2 py-0.5">
+                      {d.subject} <span className="font-semibold text-primary">{d.value}</span>
+                    </span>
+                  ))}
+                </div>
               </div>
             </TabsContent>
           </Tabs>

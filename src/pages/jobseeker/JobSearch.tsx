@@ -89,7 +89,7 @@ export default function JobSearch() {
                 placeholder="搜索职位名称、技能关键词..."
                 value={searchText}
                 onChange={e => setSearchText(e.target.value)}
-                className="pl-9 px-3"
+                className="pl-9 pr-3"
               />
             </div>
             <Button type="submit" size="sm" className="shrink-0 h-9">搜索</Button>

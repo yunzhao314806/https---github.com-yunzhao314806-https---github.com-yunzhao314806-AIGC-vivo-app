@@ -82,7 +82,7 @@ export function ResumeUploader({ resumeId, onUploadComplete }: ResumeUploaderPro
       .from('resumes')
       .upload(filePath, file, {
         cacheControl: '3600',
-        upsert: false,
+        upsert: true,
         contentType: file.type || 'application/octet-stream',
       });
 

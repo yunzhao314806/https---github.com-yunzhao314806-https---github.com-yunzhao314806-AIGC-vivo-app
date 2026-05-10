@@ -1,22 +1,89 @@
 import React, { useState } from 'react';
 import { TreeNode } from '@/types/types';
-import { ChevronRight, ChevronDown, Circle } from 'lucide-react';
+import { ChevronRight, ChevronDown, Circle, GripVertical } from 'lucide-react';
 
 interface CapabilityTreeChartProps {
   data: TreeNode;
   depth?: number;
+  /** 可编辑模式：叶节点支持拖拽调整值 */
+  editable?: boolean;
+  onChange?: (newData: TreeNode) => void;
 }
 
 interface TreeNodeItemProps {
   node: TreeNode;
   depth: number;
-  expanded?: boolean;
+  editable: boolean;
+  onLeafChange?: (name: string, value: number) => void;
 }
 
-function TreeNodeItem({ node, depth }: TreeNodeItemProps) {
+function getBarColor(value?: number) {
+  if (value === undefined) return null;
+  if (value >= 80) return 'bg-primary';
+  if (value >= 60) return 'bg-chart-2';
+  if (value >= 40) return 'bg-chart-4';
+  return 'bg-muted-foreground';
+}
+
+function deepUpdate(node: TreeNode, leafName: string, newValue: number): TreeNode {
+  if (!node.children || node.children.length === 0) {
+    return node.name === leafName ? { ...node, value: newValue } : node;
+  }
+  return { ...node, children: node.children.map(c => deepUpdate(c, leafName, newValue)) };
+}
+
+function TreeNodeItem({ node, depth, editable, onLeafChange }: TreeNodeItemProps) {
   const [isExpanded, setIsExpanded] = useState(depth < 2);
+  const [dragging, setDragging] = useState(false);
   const hasChildren = node.children && node.children.length > 0;
+  const isLeaf = !hasChildren;
   const indent = depth * 20;
+  const barColor = getBarColor(node.value);
+
+  // 拖拽调整值
+  const handleBarDrag = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!editable || !isLeaf || node.value === undefined) return;
+    const barEl = e.currentTarget;
+    const rect = barEl.getBoundingClientRect();
+    setDragging(true);
+
+    const update = (clientX: number) => {
+      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      onLeafChange?.(node.name, Math.round(ratio * 100));
+    };
+    update(e.clientX);
+
+    const onMove = (ev: MouseEvent) => update(ev.clientX);
+    const onUp = () => {
+      setDragging(false);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  // 触摸拖拽
+  const handleBarTouchDrag = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!editable || !isLeaf || node.value === undefined) return;
+    const barEl = e.currentTarget;
+    const rect = barEl.getBoundingClientRect();
+    setDragging(true);
+
+    const update = (clientX: number) => {
+      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      onLeafChange?.(node.name, Math.round(ratio * 100));
+    };
+
+    const onMove = (ev: TouchEvent) => { ev.preventDefault(); update(ev.touches[0].clientX); };
+    const onEnd = () => {
+      setDragging(false);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onEnd);
+    };
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onEnd);
+  };
 
   const getNodeColor = () => {
     if (depth === 0) return 'text-primary font-semibold text-base';
@@ -24,45 +91,71 @@ function TreeNodeItem({ node, depth }: TreeNodeItemProps) {
     return 'text-muted-foreground text-sm';
   };
 
-  const getBarColor = () => {
-    if (node.value === undefined) return null;
-    if (node.value >= 80) return 'bg-primary';
-    if (node.value >= 60) return 'bg-chart-2';
-    if (node.value >= 40) return 'bg-chart-4';
-    return 'bg-muted-foreground';
-  };
-
   return (
     <div>
       <div
-        className={`flex items-center gap-2 py-1.5 rounded-sm hover:bg-muted/50 cursor-pointer transition-colors ${hasChildren ? '' : 'cursor-default'}`}
+        className={`flex items-center gap-2 py-1.5 rounded-sm transition-colors ${
+          hasChildren ? 'hover:bg-muted/50 cursor-pointer' : 'cursor-default'
+        }`}
         style={{ paddingLeft: `${indent + 8}px` }}
         onClick={() => hasChildren && setIsExpanded(v => !v)}
       >
         <span className="shrink-0 w-4 h-4 flex items-center justify-center">
           {hasChildren ? (
-            isExpanded ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+            isExpanded
+              ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+              : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
           ) : (
             <Circle className="w-2 h-2 text-muted-foreground fill-muted-foreground" />
           )}
         </span>
         <span className={`flex-1 min-w-0 truncate ${getNodeColor()}`}>{node.name}</span>
+
         {node.value !== undefined && (
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="w-20 h-1.5 bg-muted rounded-full overflow-hidden">
+          <div className="flex items-center gap-2 shrink-0 pr-2">
+            {/* 可拖拽进度条 */}
+            <div
+              className={`relative w-24 h-3 bg-muted rounded-full overflow-hidden ${
+                editable && isLeaf ? 'cursor-ew-resize select-none' : ''
+              } ${dragging ? 'ring-1 ring-primary' : ''}`}
+              onMouseDown={editable && isLeaf ? handleBarDrag : undefined}
+              onTouchStart={editable && isLeaf ? handleBarTouchDrag : undefined}
+              title={editable && isLeaf ? '拖拽调整能力值' : undefined}
+            >
               <div
-                className={`h-full rounded-full transition-all ${getBarColor()}`}
+                className={`h-full rounded-full transition-all ${barColor ?? 'bg-muted-foreground'}`}
                 style={{ width: `${node.value}%` }}
               />
+              {/* 编辑模式拖拽手柄标识 */}
+              {editable && isLeaf && (
+                <div
+                  className="absolute top-0 h-full flex items-center pointer-events-none"
+                  style={{ left: `${Math.max(0, node.value - 8)}%` }}
+                >
+                  <div className="w-1.5 h-1.5 rounded-full bg-background border border-primary opacity-80" />
+                </div>
+              )}
             </div>
-            <span className="text-xs text-muted-foreground w-7 text-right">{node.value}</span>
+            <span className="text-xs text-muted-foreground w-7 text-right tabular-nums">
+              {node.value}
+            </span>
+            {editable && isLeaf && (
+              <GripVertical className="w-3 h-3 text-muted-foreground/40 shrink-0" />
+            )}
           </div>
         )}
       </div>
+
       {hasChildren && isExpanded && (
         <div>
           {node.children!.map((child, i) => (
-            <TreeNodeItem key={i} node={child} depth={depth + 1} />
+            <TreeNodeItem
+              key={i}
+              node={child}
+              depth={depth + 1}
+              editable={editable}
+              onLeafChange={onLeafChange}
+            />
           ))}
         </div>
       )}
@@ -70,10 +163,27 @@ function TreeNodeItem({ node, depth }: TreeNodeItemProps) {
   );
 }
 
-export function CapabilityTreeChart({ data, depth = 0 }: CapabilityTreeChartProps) {
+export function CapabilityTreeChart({ data, depth = 0, editable = false, onChange }: CapabilityTreeChartProps) {
+  const handleLeafChange = (leafName: string, value: number) => {
+    const updated = deepUpdate(data, leafName, value);
+    onChange?.(updated);
+  };
+
   return (
     <div className="w-full">
-      <TreeNodeItem node={data} depth={depth} />
+      {editable && (
+        <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
+          <GripVertical className="w-3 h-3" />
+          拖拽蓝色进度条可调整技能掌握程度
+        </p>
+      )}
+      <TreeNodeItem
+        node={data}
+        depth={depth}
+        editable={editable}
+        onLeafChange={handleLeafChange}
+      />
     </div>
   );
 }
+

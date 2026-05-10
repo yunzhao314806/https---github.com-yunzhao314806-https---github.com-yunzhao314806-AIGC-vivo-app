@@ -2,8 +2,61 @@ import React, { useState } from 'react';
 import { TreeNode } from '@/types/types';
 import { ChevronRight, ChevronDown, Circle, GripVertical } from 'lucide-react';
 
+// 互联网/科技行业默认能力树（组件内置兜底数据）
+const TECH_DEFAULT_TREE: TreeNode = {
+  name: '互联网/科技综合能力',
+  children: [
+    {
+      name: '编程语言',
+      children: [
+        { name: 'JavaScript', value: 75 },
+        { name: 'TypeScript', value: 70 },
+        { name: 'Python', value: 80 },
+        { name: 'Java', value: 65 },
+        { name: 'Go', value: 50 },
+      ],
+    },
+    {
+      name: '前端技术',
+      children: [
+        { name: 'React', value: 78 },
+        { name: 'Vue', value: 65 },
+        { name: 'CSS/Tailwind', value: 72 },
+        { name: '性能优化', value: 60 },
+      ],
+    },
+    {
+      name: '后端与架构',
+      children: [
+        { name: 'Node.js', value: 68 },
+        { name: 'Spring Boot', value: 62 },
+        { name: '微服务', value: 55 },
+        { name: 'RESTful API', value: 75 },
+      ],
+    },
+    {
+      name: '数据与AI',
+      children: [
+        { name: 'MySQL', value: 72 },
+        { name: 'Redis', value: 60 },
+        { name: '机器学习', value: 55 },
+        { name: '数据分析', value: 65 },
+      ],
+    },
+    {
+      name: '工程与运维',
+      children: [
+        { name: 'Git', value: 85 },
+        { name: 'Docker', value: 63 },
+        { name: 'CI/CD', value: 58 },
+        { name: 'Linux', value: 70 },
+      ],
+    },
+  ],
+};
+
 interface CapabilityTreeChartProps {
-  data: TreeNode;
+  data?: TreeNode;
   depth?: number;
   /** 可编辑模式：叶节点支持拖拽调整值 */
   editable?: boolean;
@@ -164,8 +217,11 @@ function TreeNodeItem({ node, depth, editable, onLeafChange }: TreeNodeItemProps
 }
 
 export function CapabilityTreeChart({ data, depth = 0, editable = false, onChange }: CapabilityTreeChartProps) {
+  // 无外部数据时使用互联网/科技内置模板
+  const activeData: TreeNode = (data && data.name) ? data : TECH_DEFAULT_TREE;
+
   const handleLeafChange = (leafName: string, value: number) => {
-    const updated = deepUpdate(data, leafName, value);
+    const updated = deepUpdate(activeData, leafName, value);
     onChange?.(updated);
   };
 
@@ -178,7 +234,7 @@ export function CapabilityTreeChart({ data, depth = 0, editable = false, onChang
         </p>
       )}
       <TreeNodeItem
-        node={data}
+        node={activeData}
         depth={depth}
         editable={editable}
         onLeafChange={handleLeafChange}

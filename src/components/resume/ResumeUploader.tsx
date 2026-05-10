@@ -66,10 +66,18 @@ export function ResumeUploader({ resumeId, onUploadComplete }: ResumeUploaderPro
 
     setUploadState({ status: 'uploading', progress: 5, fileName: file.name, errorMsg: '' });
 
-    // 构造文件路径：user_id/resume_id/filename（保证唯一性）
+    // 构造文件路径：user_id/resume_id/timestamp_safename（仅保留 ASCII 安全字符）
     const ext = file.name.substring(file.name.lastIndexOf('.'));
-    const safeName = file.name.replace(/[^a-zA-Z0-9._\u4e00-\u9fa5-]/g, '_');
-    const filePath = `${user.id}/${resumeId}/${Date.now()}_${safeName}`;
+    const baseName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
+    // 去掉非 ASCII 及 Storage 不支持的字符，中文转为空字符串后合并连字符
+    const safeBase = baseName
+      .replace(/[^\x00-\x7F]/g, '')          // 移除所有非 ASCII（含中文）
+      .replace(/[^a-zA-Z0-9._-]/g, '_')      // 剩余特殊字符转 _
+      .replace(/_{2,}/g, '_')                 // 连续 _ 合并
+      .replace(/^_+|_+$/g, '')               // 去掉首尾 _
+      || 'resume';                            // 全是中文时兜底名
+    const safeExt = ext.replace(/[^a-zA-Z0-9.]/g, '');
+    const filePath = `${user.id}/${resumeId}/${Date.now()}_${safeBase}${safeExt}`;
 
     // 模拟进度 - Supabase 客户端上传不暴露进度回调，用定时器模拟
     let fakeProgress = 5;

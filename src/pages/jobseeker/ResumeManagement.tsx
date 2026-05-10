@@ -57,7 +57,7 @@ const DEFAULT_RADAR_DATA = [
 ];
 
 const DEFAULT_TREE = {
-  name: '互联网/科技综合能力',
+  name: '计算机综合能力',
   children: [
     {
       name: '编程语言',
@@ -158,6 +158,10 @@ export default function ResumeManagement() {
       }
       if (data.tree_data && Object.keys(data.tree_data).length > 0) {
         setTreeDataEditable(data.tree_data as TreeNode);
+      }
+      // 同步行业选择器，确保下拉与保存的 industry 一致
+      if (data.industry) {
+        setSelectedIndustry(data.industry);
       }
     }
   };
@@ -623,7 +627,17 @@ export default function ResumeManagement() {
             <div className="flex items-center gap-2 flex-wrap">
               <select
                 value={selectedIndustry}
-                onChange={e => setSelectedIndustry(e.target.value)}
+                onChange={e => {
+                  const newIndustry = e.target.value;
+                  setSelectedIndustry(newIndustry);
+                  // 切换行业时，将树数据重置为该行业的模板
+                  const tmpl = templates.find(t => t.industry === newIndustry);
+                  if (tmpl?.skill_tree && Object.keys(tmpl.skill_tree).length > 0) {
+                    setTreeDataEditable(tmpl.skill_tree as TreeNode);
+                  } else if (newIndustry === 'tech') {
+                    setTreeDataEditable(DEFAULT_TREE);
+                  }
+                }}
                 className="text-sm border border-border rounded-md px-2 py-1 bg-background text-foreground"
               >
                 {templates.map(t => (

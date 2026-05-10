@@ -222,3 +222,61 @@ export interface RegisterData {
   user_type: UserType;
   company_name?: string;
 }
+
+// ── AI 模拟面试 ────────────────────────────────────────────────
+export type InterviewStatus = 'active' | 'completed' | 'aborted';
+export type InterviewDifficulty = 'junior' | 'intermediate' | 'senior';
+
+export interface MockInterview {
+  id: string;
+  profile_id: string;
+  direction: string;
+  difficulty: InterviewDifficulty;
+  status: InterviewStatus;
+  total_questions: number;
+  current_question: number;
+  started_at: string;
+  ended_at?: string;
+  created_at: string;
+}
+
+export interface MockInterviewMessage {
+  id: string;
+  interview_id: string;
+  role: 'interviewer' | 'user' | 'system';
+  content: string;
+  question_index?: number;
+  follow_up_round?: number;
+  created_at: string;
+}
+
+export interface QuestionReview {
+  question: string;
+  pros: string;
+  cons: string;
+  score: number;
+}
+
+export interface ImprovementSuggestion {
+  dimension: string;
+  advice: string;
+  resources: string;
+}
+
+export interface RadarItem {
+  subject: string;
+  value: number;
+}
+
+export interface MockInterviewReport {
+  id: string;
+  interview_id: string;
+  profile_id: string;
+  overall_score: number;
+  radar_data: RadarItem[];
+  question_reviews: QuestionReview[];
+  suggestions: ImprovementSuggestion[];
+  summary?: string;
+  created_at: string;
+}
+

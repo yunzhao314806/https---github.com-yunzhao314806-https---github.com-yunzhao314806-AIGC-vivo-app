@@ -19,7 +19,7 @@ const jobseekerNavItems = [
   { path: '/jobseeker/home', label: '首页', icon: Home },
   { path: '/jobseeker/resume', label: '简历管理', icon: FileText },
   { path: '/jobseeker/jobs', label: '职位搜索', icon: Search },
-  { path: '/jobseeker/ai-match', label: 'AI匹配', icon: BrainCircuit },
+  { path: '/jobseeker/ai-match', label: 'AI面试', icon: BrainCircuit },
   { path: '/jobseeker/profile', label: '个人中心', icon: User },
 ];
 

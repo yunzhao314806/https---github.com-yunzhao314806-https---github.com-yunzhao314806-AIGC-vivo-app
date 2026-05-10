@@ -7,7 +7,7 @@ import JobseekerHome from '@/pages/jobseeker/Home';
 import ResumeManagement from '@/pages/jobseeker/ResumeManagement';
 import JobSearch from '@/pages/jobseeker/JobSearch';
 import JobDetail from '@/pages/jobseeker/JobDetail';
-import AIMatch from '@/pages/jobseeker/AIMatch';
+import MockInterview from '@/pages/jobseeker/MockInterview';
 import JobseekerProfile from '@/pages/jobseeker/Profile';
 
 // 企业页面
@@ -39,7 +39,7 @@ export const routes: RouteConfig[] = [
   { path: '/jobseeker/resume', element: <ResumeManagement /> },
   { path: '/jobseeker/jobs', element: <JobSearch /> },
   { path: '/jobseeker/jobs/:id', element: <JobDetail /> },
-  { path: '/jobseeker/ai-match', element: <AIMatch /> },
+  { path: '/jobseeker/ai-match', element: <MockInterview /> },
   { path: '/jobseeker/profile', element: <JobseekerProfile /> },
 
   // 企业路由

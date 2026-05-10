@@ -91,7 +91,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const email = `${username}@miaoda.com`;
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
-      toast.error('登录失败：' + (error.message.includes('Invalid') ? '用户名或密码错误' : error.message));
+      if (error.message.includes('Invalid login credentials') || error.message.includes('invalid_credentials')) {
+        toast.error('用户名或密码错误，请重新输入');
+      } else if (error.message.includes('Email not confirmed')) {
+        toast.error('账号邮箱尚未验证，请联系管理员');
+      } else {
+        toast.error('登录失败：' + error.message);
+      }
       throw error;
     }
     toast.success('登录成功');
@@ -117,6 +123,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         toast.error('注册失败：' + error.message);
       }
       throw error;
+    }
+
+    // signUp 返回但用户未创建（邮箱已存在时 Supabase 返回假成功）
+    if (!authData.user) {
+      const err = new Error('用户名已被注册，请直接登录或换一个用户名');
+      toast.error(err.message);
+      throw err;
     }
 
     // 如果是企业用户，创建企业信息

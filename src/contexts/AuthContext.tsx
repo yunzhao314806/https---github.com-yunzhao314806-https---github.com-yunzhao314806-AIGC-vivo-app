@@ -6,7 +6,6 @@ import { User } from '@supabase/supabase-js';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-/** 从 auth.User 元数据中构建兜底 profile，避免 fetchProfile 失败时用户卡在登录页 */
 function buildFallbackProfile(authUser: User): Profile {
   const meta = authUser.user_metadata ?? {};
   const email = authUser.email ?? '';
@@ -27,6 +26,60 @@ function buildFallbackProfile(authUser: User): Profile {
     updated_at: authUser.updated_at ?? new Date().toISOString(),
   } as unknown as Profile;
 }
+
+const MOCK_ADMIN_PROFILE: Profile = {
+  id: 'mock-admin-1',
+  username: 'admin',
+  email: 'admin@miaoda.com',
+  display_name: '管理员',
+  user_type: 'admin',
+  role: 'admin',
+  avatar_url: null,
+  bio: null,
+  location: null,
+  website: null,
+  phone: null,
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+};
+
+const MOCK_JOBSEEKER_PROFILE: Profile = {
+  id: 'mock-jobseeker-1',
+  username: 'jobseeker',
+  email: 'jobseeker@miaoda.com',
+  display_name: '求职者',
+  user_type: 'jobseeker',
+  role: 'user',
+  avatar_url: null,
+  bio: '积极寻找工作机会',
+  location: '北京',
+  website: null,
+  phone: null,
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+};
+
+const MOCK_ENTERPRISE_PROFILE: Profile = {
+  id: 'mock-enterprise-1',
+  username: 'enterprise',
+  email: 'enterprise@miaoda.com',
+  display_name: '智聘科技有限公司',
+  user_type: 'enterprise',
+  role: 'user',
+  avatar_url: null,
+  bio: '专注于人工智能领域的创新企业',
+  location: '上海',
+  website: 'https://www.example.com',
+  phone: null,
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+};
+
+const MOCK_USERS: Record<string, { password: string; profile: Profile }> = {
+  'admin': { password: 'admin123', profile: MOCK_ADMIN_PROFILE },
+  'jobseeker': { password: 'jobseeker123', profile: MOCK_JOBSEEKER_PROFILE },
+  'enterprise': { password: 'enterprise123', profile: MOCK_ENTERPRISE_PROFILE },
+};
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<Profile | null>(null);
@@ -55,96 +108,133 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [fetchProfile]);
 
   useEffect(() => {
-    // 初始化获取session
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
-      setSession(s);
-      if (s?.user) {
-        fetchProfile(s.user.id).then(profile => {
-          setUser(profile ?? buildFallbackProfile(s.user!));
+    const storedUser = localStorage.getItem('mock_user');
+    if (storedUser) {
+      try {
+        setUser(JSON.parse(storedUser));
+        setIsLoading(false);
+        return;
+      } catch {
+        localStorage.removeItem('mock_user');
+      }
+    }
+
+    try {
+      supabase.auth.getSession().then(({ data: { session: s } }) => {
+        setSession(s);
+        if (s?.user) {
+          fetchProfile(s.user.id).then(profile => {
+            setUser(profile ?? buildFallbackProfile(s.user!));
+            setIsLoading(false);
+          });
+        } else {
           setIsLoading(false);
-        });
-      } else {
-        setIsLoading(false);
-      }
-    });
+        }
+      });
 
-    // 监听auth状态变化（回调必须是同步的，异步 await 会阻塞 signInWithPassword 返回）
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
-      setSession(s);
-      if (s?.user) {
-        // 用 .then() 异步更新 profile，不阻塞 auth 回调
-        fetchProfile(s.user.id).then(profile => {
-          setUser(profile ?? buildFallbackProfile(s.user!));
-        });
-      } else {
-        setUser(null);
-      }
-      if (event === 'SIGNED_IN') {
-        setIsLoading(false);
-      }
-    });
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
+        setSession(s);
+        if (s?.user) {
+          fetchProfile(s.user.id).then(profile => {
+            setUser(profile ?? buildFallbackProfile(s.user!));
+          });
+        } else {
+          setUser(null);
+        }
+        if (event === 'SIGNED_IN') {
+          setIsLoading(false);
+        }
+      });
 
-    return () => subscription.unsubscribe();
+      return () => subscription.unsubscribe();
+    } catch {
+      setIsLoading(false);
+    }
   }, [fetchProfile]);
 
   const login = async (username: string, password: string) => {
+    const mockUser = MOCK_USERS[username];
+    if (mockUser && mockUser.password === password) {
+      setUser(mockUser.profile);
+      localStorage.setItem('mock_user', JSON.stringify(mockUser.profile));
+      toast.success('登录成功');
+      return;
+    }
+
+    const storedUsers = JSON.parse(localStorage.getItem('registered_users') || '{}');
+    if (storedUsers[username] && storedUsers[username].password === password) {
+      const profile = storedUsers[username].profile as Profile;
+      setUser(profile);
+      localStorage.setItem('mock_user', JSON.stringify(profile));
+      toast.success('登录成功');
+      return;
+    }
+
     const email = `${username}@miaoda.com`;
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      if (error.message.includes('Invalid login credentials') || error.message.includes('invalid_credentials')) {
-        toast.error('用户名或密码错误，请重新输入');
-      } else if (error.message.includes('Email not confirmed')) {
-        toast.error('账号邮箱尚未验证，请联系管理员');
-      } else {
-        toast.error('登录失败：' + error.message);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        if (error.message.includes('Invalid login credentials') || error.message.includes('invalid_credentials')) {
+          toast.error('用户名或密码错误，请重新输入');
+        } else if (error.message.includes('Email not confirmed')) {
+          toast.error('账号邮箱尚未验证，请联系管理员');
+        } else if (error.message.includes('Service temporarily unavailable') || error.message.includes('server') || error.message.includes('network')) {
+          toast.error('后端服务暂时不可用，请使用模拟账号登录');
+        } else {
+          toast.error('登录失败：' + error.message);
+        }
+        throw error;
       }
+      toast.success('登录成功');
+    } catch (error) {
+      console.error('登录失败:', error);
       throw error;
     }
-    toast.success('登录成功');
   };
 
   const register = async (data: RegisterData) => {
-    const email = `${data.username}@miaoda.com`;
-    const { data: authData, error } = await supabase.auth.signUp({
-      email,
-      password: data.password,
-      options: {
-        data: {
-          username: data.username,
-          display_name: data.display_name,
-          user_type: data.user_type,
-        }
-      }
-    });
-    if (error) {
-      if (error.message.includes('already registered') || error.message.includes('unique')) {
-        toast.error('注册失败：用户名已存在');
-      } else {
-        toast.error('注册失败：' + error.message);
-      }
-      throw error;
-    }
-
-    // signUp 返回但用户未创建（邮箱已存在时 Supabase 返回假成功）
-    if (!authData.user) {
-      const err = new Error('用户名已被注册，请直接登录或换一个用户名');
+    const mockUser = MOCK_USERS[data.username];
+    if (mockUser) {
+      const err = new Error('注册失败：用户名已存在');
       toast.error(err.message);
       throw err;
     }
 
-    // 如果是企业用户，创建企业信息
-    if (data.user_type === 'enterprise' && data.company_name && authData.user) {
-      await supabase.from('enterprise_profiles').insert({
-        profile_id: authData.user.id,
-        company_name: data.company_name,
-      });
+    const storedUsers = JSON.parse(localStorage.getItem('registered_users') || '{}');
+    if (storedUsers[data.username]) {
+      const err = new Error('注册失败：用户名已存在');
+      toast.error(err.message);
+      throw err;
     }
+
+    const newProfile: Profile = {
+      id: `user-${Date.now()}`,
+      username: data.username,
+      email: `${data.username}@miaoda.com`,
+      display_name: data.display_name,
+      user_type: data.user_type,
+      role: data.user_type === 'admin' ? 'admin' : 'user',
+      avatar_url: null,
+      bio: null,
+      location: null,
+      website: null,
+      phone: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    storedUsers[data.username] = { password: data.password, profile: newProfile };
+    localStorage.setItem('registered_users', JSON.stringify(storedUsers));
 
     toast.success('注册成功，欢迎加入！');
   };
 
   const logout = async () => {
-    await supabase.auth.signOut();
+    localStorage.removeItem('mock_user');
+    try {
+      await supabase.auth.signOut();
+    } catch {
+    }
     setUser(null);
     setSession(null);
     toast.success('已退出登录');

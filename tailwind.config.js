@@ -16,10 +16,23 @@ export default {
     theme: {
         container: {
             center: true,
-            padding: '2rem',
+            padding: '1rem',
             screens: {
+                'sm': '360px',
+                'md': '768px',
+                'lg': '1024px',
+                'xl': '1280px',
                 '2xl': '1400px'
             }
+        },
+        screens: {
+            'xs': '320px',
+            'sm': '360px',
+            'sm-plus': '390px',
+            'md': '768px',
+            'lg': '1024px',
+            'xl': '1280px',
+            '2xl': '1400px',
         },
         extend: {
             colors: {

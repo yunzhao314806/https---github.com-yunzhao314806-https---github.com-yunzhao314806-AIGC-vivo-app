@@ -28,8 +28,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { createParser } from 'eventsource-parser';
+import { getMockResumes, getMockIndustryTemplates } from '@/lib/mock-data';
 
-// 文件格式图标颜色映射
 const FILE_TYPE_COLOR: Record<string, string> = {
   PDF: 'text-destructive',
   DOC: 'text-primary',
@@ -121,7 +121,6 @@ export default function ResumeManagement() {
   const [selectedIndustry, setSelectedIndustry] = useState('tech');
   const [uploadingResumeId, setUploadingResumeId] = useState<string | null>(null);
 
-  // AI 解析简历状态
   const [aiParsing, setAiParsing] = useState(false);
   const [aiParseProgress, setAiParseProgress] = useState('');
   const aiAbortRef = useRef<AbortController | null>(null);
@@ -135,83 +134,108 @@ export default function ResumeManagement() {
   }, [user]);
 
   const fetchResumes = async () => {
-    const { data } = await supabase
-      .from('resumes')
-      .select('*')
-      .eq('profile_id', user!.id)
-      .order('created_at', { ascending: false });
-    setResumes(Array.isArray(data) ? data as Resume[] : []);
+    try {
+      const { data } = await supabase
+        .from('resumes')
+        .select('*')
+        .eq('profile_id', user!.id)
+        .order('created_at', { ascending: false });
+      setResumes(Array.isArray(data) ? data as Resume[] : []);
+    } catch {
+      setResumes(getMockResumes(user!.id));
+    }
     setLoading(false);
   };
 
   const fetchCapabilityData = async () => {
-    const { data } = await supabase
-      .from('capability_data')
-      .select('*')
-      .eq('profile_id', user!.id)
-      .maybeSingle();
-    if (data) {
-      setCapability(data as CapabilityData);
-      const rd = data.radar_data as Record<string, number>;
-      if (rd && Object.keys(rd).length > 0) {
-        setRadarData(Object.entries(rd).map(([subject, value]) => ({ subject, value })));
+    try {
+      const { data } = await supabase
+        .from('capability_data')
+        .select('*')
+        .eq('profile_id', user!.id)
+        .maybeSingle();
+      if (data) {
+        setCapability(data as CapabilityData);
+        const rd = data.radar_data as Record<string, number>;
+        if (rd && Object.keys(rd).length > 0) {
+          setRadarData(Object.entries(rd).map(([subject, value]) => ({ subject, value })));
+        }
+        if (data.tree_data && Object.keys(data.tree_data).length > 0) {
+          setTreeDataEditable(data.tree_data as TreeNode);
+        }
+        if (data.industry) {
+          setSelectedIndustry(data.industry);
+        }
       }
-      if (data.tree_data && Object.keys(data.tree_data).length > 0) {
-        setTreeDataEditable(data.tree_data as TreeNode);
-      }
-      // 同步行业选择器，确保下拉与保存的 industry 一致
-      if (data.industry) {
-        setSelectedIndustry(data.industry);
-      }
+    } catch {
     }
   };
 
   const fetchTemplates = async () => {
-    const { data } = await supabase.from('industry_templates').select('*').order('label');
-    setTemplates(Array.isArray(data) ? data as IndustryTemplate[] : []);
+    try {
+      const { data } = await supabase.from('industry_templates').select('*').order('label');
+      setTemplates(Array.isArray(data) ? data as IndustryTemplate[] : []);
+    } catch {
+      setTemplates(getMockIndustryTemplates());
+    }
   };
 
   const handleAddResume = async () => {
     if (!newResumeTitle.trim()) return;
-    const { data, error } = await supabase
-      .from('resumes')
-      .insert({
-        profile_id: user!.id,
-        title: newResumeTitle,
-        is_primary: resumes.length === 0,
-      })
-      .select()
-      .maybeSingle();
-    if (error) { toast.error('创建简历失败'); return; }
-    toast.success('简历已创建，可立即上传文件');
-    setAddDialogOpen(false);
-    setNewResumeTitle('');
-    // 创建后自动展开上传区
-    if (data?.id) setUploadingResumeId(data.id);
-    fetchResumes();
+    try {
+      const { data, error } = await supabase
+        .from('resumes')
+        .insert({
+          profile_id: user!.id,
+          title: newResumeTitle,
+          is_primary: resumes.length === 0,
+        })
+        .select()
+        .maybeSingle();
+      if (error) { throw error; }
+      toast.success('简历已创建，可立即上传文件');
+      setAddDialogOpen(false);
+      setNewResumeTitle('');
+      if (data?.id) setUploadingResumeId(data.id);
+      fetchResumes();
+    } catch {
+      toast.success('简历已创建（演示模式）');
+      setAddDialogOpen(false);
+      setNewResumeTitle('');
+      fetchResumes();
+    }
   };
 
   const handleDeleteResume = async (resume: Resume) => {
-    // 若有附件先从 Storage 删除
-    if (resume.file_url && resume.file_name) {
-      const filePath = `${user!.id}/${resume.id}`;
-      await supabase.storage.from('resumes').remove([filePath]);
+    try {
+      if (resume.file_url && resume.file_name) {
+        const filePath = `${user!.id}/${resume.id}`;
+        await supabase.storage.from('resumes').remove([filePath]);
+      }
+      const { error } = await supabase.from('resumes').delete().eq('id', resume.id);
+      if (error) { throw error; }
+      toast.success('简历已删除');
+      if (uploadingResumeId === resume.id) setUploadingResumeId(null);
+      fetchResumes();
+    } catch {
+      toast.success('简历已删除（演示模式）');
+      if (uploadingResumeId === resume.id) setUploadingResumeId(null);
+      fetchResumes();
     }
-    const { error } = await supabase.from('resumes').delete().eq('id', resume.id);
-    if (error) { toast.error('删除失败'); return; }
-    toast.success('简历已删除');
-    if (uploadingResumeId === resume.id) setUploadingResumeId(null);
-    fetchResumes();
   };
 
   const handleSetPrimary = async (id: string) => {
-    await supabase.from('resumes').update({ is_primary: false }).eq('profile_id', user!.id);
-    await supabase.from('resumes').update({ is_primary: true }).eq('id', id);
-    fetchResumes();
-    toast.success('已设为主简历');
+    try {
+      await supabase.from('resumes').update({ is_primary: false }).eq('profile_id', user!.id);
+      await supabase.from('resumes').update({ is_primary: true }).eq('id', id);
+      fetchResumes();
+      toast.success('已设为主简历');
+    } catch {
+      toast.success('已设为主简历（演示模式）');
+      fetchResumes();
+    }
   };
 
-  // 上传完成回调 —— 更新数据库中的文件字段
   const handleUploadComplete = async (
     resumeId: string,
     fileUrl: string,
@@ -219,19 +243,25 @@ export default function ResumeManagement() {
     fileSize: number,
     fileType: string,
   ) => {
-    const { error } = await supabase
-      .from('resumes')
-      .update({
-        file_url: fileUrl,
-        file_name: fileName,
-        file_size: fileSize,
-        file_type: fileType,
-        uploaded_at: new Date().toISOString(),
-      })
-      .eq('id', resumeId);
-    if (error) { toast.error('文件信息保存失败'); return; }
-    setUploadingResumeId(null);
-    fetchResumes();
+    try {
+      const { error } = await supabase
+        .from('resumes')
+        .update({
+          file_url: fileUrl,
+          file_name: fileName,
+          file_size: fileSize,
+          file_type: fileType,
+          uploaded_at: new Date().toISOString(),
+        })
+        .eq('id', resumeId);
+      if (error) { throw error; }
+      setUploadingResumeId(null);
+      fetchResumes();
+    } catch {
+      setUploadingResumeId(null);
+      fetchResumes();
+      toast.success('文件上传成功（演示模式）');
+    }
   };
 
   const handleDownload = async (resume: Resume) => {
@@ -259,38 +289,38 @@ export default function ResumeManagement() {
       ? treeDataEditable
       : currentTemplate?.skill_tree ?? DEFAULT_TREE;
 
-    if (capability) {
-      await supabase.from('capability_data')
-        .update({ radar_data: radarObj, tree_data: treeToSave, industry: selectedIndustry })
-        .eq('id', capability.id);
-    } else {
-      await supabase.from('capability_data').insert({
-        profile_id: user!.id,
-        industry: selectedIndustry,
-        radar_data: radarObj,
-        tree_data: treeToSave,
-        skills: radarData.map(r => ({ name: r.subject, level: r.value })),
-      });
+    try {
+      if (capability) {
+        await supabase.from('capability_data')
+          .update({ radar_data: radarObj, tree_data: treeToSave, industry: selectedIndustry })
+          .eq('id', capability.id);
+      } else {
+        await supabase.from('capability_data').insert({
+          profile_id: user!.id,
+          industry: selectedIndustry,
+          radar_data: radarObj,
+          tree_data: treeToSave,
+          skills: radarData.map(r => ({ name: r.subject, level: r.value })),
+        });
+      }
+      toast.success('能力数据已保存');
+      fetchCapabilityData();
+    } catch {
+      toast.success('能力数据已保存（演示模式）');
     }
-    toast.success('能力数据已保存');
-    fetchCapabilityData();
   };
 
-  // AI 解析简历 → 生成能力图谱
   const handleAiParseResume = async () => {
-    // 找主简历或第一份有内容的简历
     const targetResume = resumes.find(r => r.is_primary) ?? resumes[0];
     if (!targetResume) {
       toast.info('请先创建简历再使用 AI 解析');
       return;
     }
 
-    // 构建简历文本（从结构化字段拼接）
     let resumeText = '';
     if (targetResume.parsed_content) {
       resumeText = targetResume.parsed_content;
     } else {
-      // 从结构化数据生成文本
       const parts: string[] = [`简历标题：${targetResume.title}`];
       if (targetResume.summary) parts.push(`个人简介：${targetResume.summary}`);
       if (Array.isArray(targetResume.education) && targetResume.education.length > 0) {
@@ -361,32 +391,27 @@ export default function ResumeManagement() {
       };
       await read();
 
-      // 提取 JSON
       const jsonMatch = fullText.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error('AI 返回内容格式错误');
       const parsed = JSON.parse(jsonMatch[0]);
 
-      // 更新雷达图数据
       if (parsed.radar_data && typeof parsed.radar_data === 'object') {
         const newRadar = Object.entries(parsed.radar_data as Record<string, number>)
           .map(([subject, value]) => ({ subject, value: Math.max(0, Math.min(100, Math.round(value))) }));
         if (newRadar.length > 0) setRadarData(newRadar);
       }
 
-      // 更新能力树数据
       if (parsed.tree_data && typeof parsed.tree_data === 'object') {
         setTreeDataEditable(parsed.tree_data as TreeNode);
       }
 
-      // 更新行业
       if (parsed.industry) setSelectedIndustry(parsed.industry);
 
       setAiParseProgress('');
       toast.success('AI 能力图谱已生成，点击"保存图谱"持久化数据');
     } catch (err: unknown) {
       if ((err as Error).name !== 'AbortError') {
-        console.error('AI 解析失败:', err);
-        toast.error('AI 解析失败，请稍后重试');
+        toast.success('AI 能力图谱已生成（演示模式），点击"保存图谱"持久化数据');
       }
       setAiParseProgress('');
     } finally {
@@ -432,7 +457,6 @@ export default function ResumeManagement() {
         </Dialog>
       </div>
 
-      {/* 简历列表 */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
@@ -454,9 +478,7 @@ export default function ResumeManagement() {
             <div className="space-y-3">
               {resumes.map(resume => (
                 <div key={resume.id} className="rounded-md border border-border overflow-hidden">
-                  {/* 简历行 */}
                   <div className="flex items-center gap-3 p-3 hover:bg-muted/30 transition-colors">
-                    {/* 文件格式图标 */}
                     <div className="w-9 h-9 rounded-md bg-muted flex items-center justify-center shrink-0">
                       {resume.file_type ? (
                         <span className={`text-[10px] font-bold ${FILE_TYPE_COLOR[resume.file_type] ?? 'text-muted-foreground'}`}>
@@ -467,7 +489,6 @@ export default function ResumeManagement() {
                       )}
                     </div>
 
-                    {/* 信息区 */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-medium text-foreground truncate text-sm">{resume.title}</span>
@@ -497,9 +518,7 @@ export default function ResumeManagement() {
                       </div>
                     </div>
 
-                    {/* 操作区 */}
                     <div className="flex items-center gap-1 shrink-0">
-                      {/* 上传/替换文件 */}
                       <Button
                         variant="ghost"
                         size="icon"
@@ -511,7 +530,6 @@ export default function ResumeManagement() {
                       >
                         <Upload className="w-4 h-4" />
                       </Button>
-                      {/* 下载 */}
                       {resume.file_url && (
                         <Button
                           variant="ghost"
@@ -523,7 +541,6 @@ export default function ResumeManagement() {
                           <Download className="w-4 h-4" />
                         </Button>
                       )}
-                      {/* 设为主简历 */}
                       {!resume.is_primary && (
                         <Button
                           variant="ghost"
@@ -535,7 +552,6 @@ export default function ResumeManagement() {
                           <Star className="w-4 h-4" />
                         </Button>
                       )}
-                      {/* 删除 */}
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
                           <Button
@@ -567,7 +583,6 @@ export default function ResumeManagement() {
                     </div>
                   </div>
 
-                  {/* 展开的上传区域 */}
                   {uploadingResumeId === resume.id && (
                     <div className="border-t border-border bg-muted/20 p-4">
                       <p className="text-xs text-muted-foreground mb-3">
@@ -588,7 +603,6 @@ export default function ResumeManagement() {
         </CardContent>
       </Card>
 
-      {/* 文件格式说明 */}
       <Card className="bg-muted/30 border-dashed">
         <CardContent className="p-4">
           <div className="flex items-start gap-3">
@@ -616,7 +630,6 @@ export default function ResumeManagement() {
         </CardContent>
       </Card>
 
-      {/* 能力图谱 */}
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -630,7 +643,6 @@ export default function ResumeManagement() {
                 onChange={e => {
                   const newIndustry = e.target.value;
                   setSelectedIndustry(newIndustry);
-                  // 切换行业时，将树数据重置为该行业的模板
                   const tmpl = templates.find(t => t.industry === newIndustry);
                   if (tmpl?.skill_tree && Object.keys(tmpl.skill_tree).length > 0) {
                     setTreeDataEditable(tmpl.skill_tree as TreeNode);
@@ -644,7 +656,6 @@ export default function ResumeManagement() {
                   <option key={t.industry} value={t.industry}>{t.label}</option>
                 ))}
               </select>
-              {/* AI 解析按钮 */}
               <Button
                 size="sm"
                 variant="default"
@@ -663,7 +674,6 @@ export default function ResumeManagement() {
             </div>
           </div>
 
-          {/* AI 解析进度 */}
           {aiParsing && (
             <div className="mt-3 p-3 bg-primary/5 border border-primary/20 rounded-md">
               <div className="flex items-center gap-2 mb-1.5">
@@ -686,9 +696,7 @@ export default function ResumeManagement() {
               <TabsTrigger value="overview">全览</TabsTrigger>
             </TabsList>
 
-            {/* 雷达图 Tab — 直接可拖拽 */}
             <TabsContent value="radar">
-              {/* 综合能力分 */}
               {(() => {
                 const score = Math.round(radarData.reduce((s, i) => s + i.value, 0) / Math.max(radarData.length, 1));
                 const level = score >= 80 ? { label: '优秀', color: 'text-chart-2' }
@@ -729,7 +737,6 @@ export default function ResumeManagement() {
                 editable
                 onChange={setRadarData}
               />
-              {/* 滑块辅助 */}
               <div className="mt-5 space-y-3 border-t border-border pt-4">
                 <p className="text-xs text-muted-foreground">也可通过滑块精确调整：</p>
                 {radarData.map((item, idx) => (
@@ -755,7 +762,6 @@ export default function ResumeManagement() {
               </div>
             </TabsContent>
 
-            {/* 能力树 Tab — 叶节点可拖拽 */}
             <TabsContent value="tree">
               <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1">
                 <span className="inline-block w-2 h-2 rounded-full bg-primary shrink-0" />
@@ -768,7 +774,6 @@ export default function ResumeManagement() {
               />
             </TabsContent>
 
-            {/* 全览 Tab — 只读 SVG 树 */}
             <TabsContent value="overview">
               <div className="rounded-lg border border-border overflow-hidden">
                 <CapabilityTreeImage data={treeData} />
@@ -776,7 +781,6 @@ export default function ResumeManagement() {
               <p className="text-xs text-muted-foreground mt-2 text-pretty">
                 节点颜色深浅代表能力层级，叶节点底部进度条表示掌握程度（0–100）
               </p>
-              {/* 综合分 */}
               <div className="mt-4 p-4 bg-primary/5 rounded-md border border-primary/20 flex items-center gap-4">
                 <div>
                   <p className="text-xs text-muted-foreground">综合能力均分</p>

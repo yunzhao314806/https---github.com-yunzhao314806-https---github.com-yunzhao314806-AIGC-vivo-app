@@ -93,9 +93,19 @@ const Login: React.FC = () => {
 
         <Card className="shadow-lg border-border">
           <CardHeader className="pb-4">
-            <CardTitle className="text-lg text-balance">欢迎使用</CardTitle>
-            <CardDescription className="text-pretty">登录或注册以使用智能招聘服务</CardDescription>
-          </CardHeader>
+          <CardTitle className="text-lg text-balance">欢迎使用</CardTitle>
+          <CardDescription className="text-pretty">登录或注册以使用智能招聘服务</CardDescription>
+        </CardHeader>
+        <div className="px-6 pb-2">
+          <div className="bg-muted/50 rounded-lg p-3 text-xs text-muted-foreground">
+            <p className="font-medium mb-1">快速体验（模拟账号）：</p>
+            <div className="space-y-1">
+              <p>管理员：admin / admin123</p>
+              <p>求职者：jobseeker / jobseeker123</p>
+              <p>企业用户：enterprise / enterprise123</p>
+            </div>
+          </div>
+        </div>
           <CardContent>
             <Tabs defaultValue="login">
               <TabsList className="grid grid-cols-2 w-full mb-6">

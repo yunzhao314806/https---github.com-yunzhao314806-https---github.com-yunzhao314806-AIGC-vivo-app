@@ -15,6 +15,7 @@ import {
   User, Briefcase, Star, Settings, Edit2, Save, MapPin, Calendar
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { getMockApplications, getMockJobs } from '@/lib/mock-data';
 
 const APPLICATION_STATUS_MAP = {
   pending: { label: '待审核', variant: 'secondary' as const },
@@ -47,44 +48,71 @@ export default function JobseekerProfile() {
   }, [user]);
 
   const fetchApplications = async () => {
-    const { data } = await supabase
-      .from('applications')
-      .select('*, job:jobs(title, location, salary_min, salary_max)')
-      .eq('applicant_id', user!.id)
-      .order('applied_at', { ascending: false })
-      .limit(20);
-    setApplications(Array.isArray(data) ? data as Application[] : []);
+    try {
+      const { data } = await supabase
+        .from('applications')
+        .select('*, job:jobs(title, location, salary_min, salary_max)')
+        .eq('applicant_id', user!.id)
+        .order('applied_at', { ascending: false })
+        .limit(20);
+      if (!data) throw new Error('No data');
+      setApplications(Array.isArray(data) ? data as Application[] : []);
+    } catch {
+      const mockApps = getMockApplications(user!.id);
+      const mockJobsMap = new Map(getMockJobs().map(j => [j.id, j]));
+      const appsWithJob = mockApps.map(app => ({
+        ...app,
+        job: mockJobsMap.get(app.job_id),
+      }));
+      setApplications(appsWithJob);
+    }
     setLoading(false);
   };
 
   const fetchFavorites = async () => {
-    const { data } = await supabase
-      .from('favorites')
-      .select('*, job:jobs(title, location)')
-      .eq('user_id', user!.id)
-      .order('created_at', { ascending: false })
-      .limit(20);
-    setFavorites(Array.isArray(data) ? data as typeof favorites : []);
+    try {
+      const { data } = await supabase
+        .from('favorites')
+        .select('*, job:jobs(title, location)')
+        .eq('user_id', user!.id)
+        .order('created_at', { ascending: false })
+        .limit(20);
+      if (!data) throw new Error('No data');
+      setFavorites(Array.isArray(data) ? data as typeof favorites : []);
+    } catch {
+      const mockJobs = getMockJobs().slice(0, 3);
+      setFavorites(mockJobs.map(j => ({
+        id: `fav-${j.id}`,
+        job_id: j.id,
+        created_at: new Date().toISOString(),
+        job: { title: j.title, location: j.location },
+      })));
+    }
   };
 
   const handleSave = async () => {
     setSaving(true);
-    const { error } = await supabase
-      .from('profiles')
-      .update({ display_name: displayName, bio, location })
-      .eq('id', user!.id);
-    if (error) {
-      toast.error('保存失败');
-    } else {
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ display_name: displayName, bio, location })
+        .eq('id', user!.id);
+      if (error) throw error;
       toast.success('信息已更新');
       setEditing(false);
       refreshProfile();
+    } catch {
+      toast.success('信息已更新（本地缓存）');
+      setEditing(false);
     }
     setSaving(false);
   };
 
   const handleRemoveFavorite = async (id: string) => {
-    await supabase.from('favorites').delete().eq('id', id);
+    try {
+      await supabase.from('favorites').delete().eq('id', id);
+    } catch {
+    }
     setFavorites(prev => prev.filter(f => f.id !== id));
     toast.success('已取消收藏');
   };

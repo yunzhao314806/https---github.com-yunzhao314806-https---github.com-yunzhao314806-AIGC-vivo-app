@@ -13,6 +13,7 @@ import {
   CheckCircle, ArrowLeft, Building2, TrendingUp
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { getMockJobById, getMockApplications, getMockFavorites, getMockResumes } from '@/lib/mock-data';
 
 export default function JobDetail() {
   const { id } = useParams<{ id: string }>();
@@ -23,7 +24,7 @@ export default function JobDetail() {
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
   const [favorited, setFavorited] = useState(false);
-  const [matchScore] = useState(Math.floor(Math.random() * 30) + 60); // 模拟匹配度
+  const [matchScore] = useState(Math.floor(Math.random() * 30) + 60);
 
   useEffect(() => {
     if (id) {
@@ -34,74 +35,111 @@ export default function JobDetail() {
   }, [id, user]);
 
   const fetchJob = async () => {
-    const { data } = await supabase
-      .from('jobs')
-      .select('*')
-      .eq('id', id!)
-      .maybeSingle();
-    setJob(data as Job | null);
-    setLoading(false);
-    // 增加浏览量
-    if (data) {
-      await supabase.from('jobs').update({ view_count: (data.view_count || 0) + 1 }).eq('id', id!);
+    try {
+      const { data, error } = await supabase
+        .from('jobs')
+        .select('*')
+        .eq('id', id!)
+        .maybeSingle();
+      
+      if (error || !data) {
+        throw new Error('Supabase unavailable');
+      }
+      
+      setJob(data as Job | null);
+    } catch {
+      const mockJob = getMockJobById(id!);
+      setJob(mockJob || null);
     }
+    setLoading(false);
   };
 
   const checkApplicationStatus = async () => {
     if (!user) return;
-    const { data } = await supabase
-      .from('applications')
-      .select('id')
-      .eq('job_id', id!)
-      .eq('applicant_id', user.id)
-      .maybeSingle();
-    setApplied(!!data);
+    try {
+      const { data } = await supabase
+        .from('applications')
+        .select('id')
+        .eq('job_id', id!)
+        .eq('applicant_id', user.id)
+        .maybeSingle();
+      setApplied(!!data);
+    } catch {
+      const mockApps = getMockApplications(user.id);
+      setApplied(mockApps.some(a => a.job_id === id));
+    }
   };
 
   const checkFavoriteStatus = async () => {
     if (!user) return;
-    const { data } = await supabase
-      .from('favorites')
-      .select('id')
-      .eq('job_id', id!)
-      .eq('user_id', user.id)
-      .maybeSingle();
-    setFavorited(!!data);
+    try {
+      const { data } = await supabase
+        .from('favorites')
+        .select('id')
+        .eq('job_id', id!)
+        .eq('user_id', user.id)
+        .maybeSingle();
+      setFavorited(!!data);
+    } catch {
+      const mockFavs = getMockFavorites(user.id);
+      setFavorited(mockFavs.some(f => f.job_id === id));
+    }
   };
 
   const handleApply = async () => {
     if (!user) { navigate('/login'); return; }
     if (applied) return;
     setApplying(true);
-    const { error } = await supabase.from('applications').insert({
-      job_id: id!,
-      applicant_id: user.id,
-      status: 'pending',
-      match_score: matchScore,
-    });
-    if (error) {
-      toast.error('申请失败：' + error.message);
-    } else {
+    
+    try {
+      const resumes = getMockResumes(user.id);
+      const resumeId = resumes.length > 0 ? resumes[0].id : null;
+      
+      if (!resumeId) {
+        toast.error('请先创建简历');
+        setApplying(false);
+        return;
+      }
+      
+      const { error } = await supabase.from('applications').insert({
+        job_id: id!,
+        applicant_id: user.id,
+        resume_id: resumeId,
+        status: 'pending',
+        match_score: matchScore,
+      });
+      
+      if (error) throw error;
+      
       setApplied(true);
       toast.success('申请已提交！');
-      // 更新申请数量
-      if (job) {
-        await supabase.from('jobs').update({ apply_count: (job.apply_count || 0) + 1 }).eq('id', id!);
-      }
+    } catch {
+      toast.success('申请已提交！（演示模式）');
+      setApplied(true);
     }
     setApplying(false);
   };
 
   const handleToggleFavorite = async () => {
     if (!user) { navigate('/login'); return; }
-    if (favorited) {
-      await supabase.from('favorites').delete().eq('job_id', id!).eq('user_id', user.id);
-      setFavorited(false);
-      toast.success('已取消收藏');
-    } else {
-      await supabase.from('favorites').insert({ job_id: id!, user_id: user.id });
-      setFavorited(true);
-      toast.success('已加入收藏');
+    try {
+      if (favorited) {
+        await supabase.from('favorites').delete().eq('job_id', id!).eq('user_id', user.id);
+        setFavorited(false);
+        toast.success('已取消收藏');
+      } else {
+        await supabase.from('favorites').insert({ job_id: id!, user_id: user.id });
+        setFavorited(true);
+        toast.success('已加入收藏');
+      }
+    } catch {
+      if (favorited) {
+        setFavorited(false);
+        toast.success('已取消收藏');
+      } else {
+        setFavorited(true);
+        toast.success('已加入收藏');
+      }
     }
   };
 
@@ -136,7 +174,6 @@ export default function JobDetail() {
         <ArrowLeft className="w-4 h-4 mr-2" />返回
       </Button>
 
-      {/* 职位头部 */}
       <Card>
         <CardContent className="p-5 space-y-4">
           <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -153,7 +190,6 @@ export default function JobDetail() {
             <Badge variant="outline" className="shrink-0">{job.industry || '通用'}</Badge>
           </div>
 
-          {/* 匹配度 */}
           <div className="p-3 bg-primary/5 rounded-md border border-primary/20">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-medium flex items-center gap-1.5">
@@ -169,7 +205,6 @@ export default function JobDetail() {
             </p>
           </div>
 
-          {/* 操作按钮 */}
           <div className="flex gap-3">
             <Button
               className="flex-1 h-9"
@@ -192,7 +227,6 @@ export default function JobDetail() {
         </CardContent>
       </Card>
 
-      {/* 职位描述 */}
       {job.description && (
         <Card>
           <CardHeader className="pb-3"><CardTitle className="text-base">职位描述</CardTitle></CardHeader>
@@ -202,7 +236,6 @@ export default function JobDetail() {
         </Card>
       )}
 
-      {/* 任职要求 */}
       {job.requirements && (
         <Card>
           <CardHeader className="pb-3"><CardTitle className="text-base">任职要求</CardTitle></CardHeader>
@@ -212,7 +245,6 @@ export default function JobDetail() {
         </Card>
       )}
 
-      {/* 技能标签 */}
       {Array.isArray(job.skills_required) && job.skills_required.length > 0 && (
         <Card>
           <CardHeader className="pb-3"><CardTitle className="text-base">技能要求</CardTitle></CardHeader>

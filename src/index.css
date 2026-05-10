@@ -1,0 +1,124 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* 主色：专业深蓝 #1A4FA8 → HSL(217, 72%, 38%) */
+    --background: 214 32% 97%;
+    --foreground: 217 30% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 217 30% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 217 30% 10%;
+
+    /* 深蓝主色 #1A4FA8 */
+    --primary: 217 72% 38%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 214 30% 92%;
+    --secondary-foreground: 217 25% 25%;
+
+    --muted: 214 30% 92%;
+    --muted-foreground: 217 15% 46%;
+
+    /* 强调色：暖橙 #F26D21 → HSL(22, 89%, 54%) */
+    --accent: 22 89% 54%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 214 25% 87%;
+    --input: 214 25% 87%;
+    --ring: 217 72% 38%;
+
+    --radius: 0.375rem;
+
+    /* Chart colors — 蓝色系渐进色阶 */
+    --chart-1: 217 72% 38%;
+    --chart-2: 22 89% 54%;
+    --chart-3: 199 89% 44%;
+    --chart-4: 43 96% 56%;
+    --chart-5: 259 70% 58%;
+
+    /* Sidebar — 深海军蓝 */
+    --sidebar-background: 217 72% 18%;
+    --sidebar-foreground: 214 40% 92%;
+    --sidebar-primary: 22 89% 54%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 217 65% 26%;
+    --sidebar-accent-foreground: 214 40% 96%;
+    --sidebar-border: 217 60% 24%;
+    --sidebar-ring: 22 89% 54%;
+  }
+
+  .dark {
+    --background: 217 30% 8%;
+    --foreground: 214 30% 93%;
+
+    --card: 217 28% 11%;
+    --card-foreground: 214 30% 93%;
+
+    --popover: 217 28% 11%;
+    --popover-foreground: 214 30% 93%;
+
+    --primary: 217 72% 55%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 217 25% 18%;
+    --secondary-foreground: 214 25% 80%;
+
+    --muted: 217 25% 18%;
+    --muted-foreground: 214 15% 60%;
+
+    --accent: 22 89% 58%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 63% 40%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 217 25% 20%;
+    --input: 217 25% 20%;
+    --ring: 217 72% 55%;
+
+    --chart-1: 217 72% 58%;
+    --chart-2: 22 89% 62%;
+    --chart-3: 199 89% 55%;
+    --chart-4: 43 96% 62%;
+    --chart-5: 259 70% 65%;
+
+    --sidebar-background: 217 35% 6%;
+    --sidebar-foreground: 214 30% 85%;
+    --sidebar-primary: 22 89% 58%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 217 30% 14%;
+    --sidebar-accent-foreground: 214 30% 90%;
+    --sidebar-border: 217 30% 14%;
+    --sidebar-ring: 22 89% 58%;
+  }
+
+  * {
+    @apply border-border;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 3px;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}

@@ -631,6 +631,37 @@ export default function ResumeManagement() {
 
             {/* 雷达图 Tab — 直接可拖拽 */}
             <TabsContent value="radar">
+              {/* 综合能力分 */}
+              {(() => {
+                const score = Math.round(radarData.reduce((s, i) => s + i.value, 0) / Math.max(radarData.length, 1));
+                const level = score >= 80 ? { label: '优秀', color: 'text-chart-2' }
+                  : score >= 65 ? { label: '良好', color: 'text-primary' }
+                  : score >= 50 ? { label: '中等', color: 'text-chart-4' }
+                  : { label: '待提升', color: 'text-muted-foreground' };
+                return (
+                  <div className="flex items-center gap-4 mb-4 p-3 rounded-lg bg-primary/5 border border-primary/15">
+                    <div className="text-center shrink-0">
+                      <p className={`text-3xl font-bold tabular-nums ${level.color}`}>{score}</p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">综合能力分</p>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <span className={`text-xs font-semibold ${level.color}`}>{level.label}</span>
+                        <span className="text-xs text-muted-foreground">/ 100 分满分</span>
+                      </div>
+                      <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-300 ${
+                            score >= 80 ? 'bg-chart-2' : score >= 65 ? 'bg-primary' : score >= 50 ? 'bg-chart-4' : 'bg-muted-foreground'
+                          }`}
+                          style={{ width: `${score}%` }}
+                        />
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-1">调整雷达图各维度后实时更新</p>
+                    </div>
+                  </div>
+                );
+              })()}
               <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1">
                 <span className="inline-block w-2 h-2 rounded-full bg-primary shrink-0" />
                 拖拽雷达图上的蓝色圆点即可直接调整能力值，完成后点击"保存图谱"

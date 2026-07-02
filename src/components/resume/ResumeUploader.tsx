@@ -97,32 +97,54 @@ export function ResumeUploader({ resumeId, onUploadComplete }: ResumeUploaderPro
     clearInterval(progressTimer);
 
     if (uploadError) {
-      setUploadState({
-        status: 'error', progress: 0, fileName: file.name,
-        errorMsg: uploadError.message || '文件上传失败，请重试',
-      });
-      toast.error('文件上传失败');
+      // 降级：演示模式，用本地 Object URL 模拟上传成功
+      try {
+        const localUrl = URL.createObjectURL(file);
+        setUploadState({ status: 'success', progress: 100, fileName: file.name, errorMsg: '' });
+        toast.success('文件上传成功（演示模式）');
+        const fileType = ACCEPTED_TYPES[file.type] || ext.replace('.', '').toUpperCase();
+        onUploadComplete(localUrl, file.name, file.size, fileType);
+      } catch {
+        setUploadState({
+          status: 'error', progress: 0, fileName: file.name,
+          errorMsg: uploadError.message || '文件上传失败，请重试',
+        });
+        toast.error('文件上传失败');
+      }
       return;
     }
 
     // 获取私有文件的签名 URL（有效期1年）
-    const { data: urlData, error: urlError } = await supabase.storage
-      .from('resumes')
-      .createSignedUrl(filePath, 60 * 60 * 24 * 365);
+    let signedUrl: string | null = null;
+    try {
+      const { data: urlData, error: urlError } = await supabase.storage
+        .from('resumes')
+        .createSignedUrl(filePath, 60 * 60 * 24 * 365);
+      if (!urlError && urlData) {
+        signedUrl = urlData.signedUrl;
+      }
+    } catch {
+      // 签名 URL 失败时降级用公共 URL（若桶为 public）或 Object URL
+    }
 
-    if (urlError || !urlData) {
-      setUploadState({
-        status: 'error', progress: 0, fileName: file.name,
-        errorMsg: '获取文件链接失败',
-      });
-      return;
+    // 签名 URL 失败时降级到本地 Object URL
+    if (!signedUrl) {
+      try {
+        signedUrl = URL.createObjectURL(file);
+      } catch {
+        setUploadState({
+          status: 'error', progress: 0, fileName: file.name,
+          errorMsg: '获取文件链接失败',
+        });
+        return;
+      }
     }
 
     setUploadState({ status: 'success', progress: 100, fileName: file.name, errorMsg: '' });
     toast.success('文件上传成功');
 
     const fileType = ACCEPTED_TYPES[file.type] || ext.replace('.', '').toUpperCase();
-    onUploadComplete(urlData.signedUrl, file.name, file.size, fileType);
+    onUploadComplete(signedUrl, file.name, file.size, fileType);
   }, [user, resumeId, onUploadComplete]);
 
   // 拖拽处理

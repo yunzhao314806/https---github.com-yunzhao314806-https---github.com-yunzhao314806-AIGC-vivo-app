@@ -1,19 +1,17 @@
 /**
  * Edge Function: short-speech-recognition
  * 短语音识别（百度语音识别，支持wav/m4a，最长60秒）
+ *
+ * 改造说明（v2）:
+ *   - CORS 改用 _shared/cors.ts（统一管理）
+ *   - 错误响应改用 _shared/responses.ts
  */
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+
+import { handleOptions, jsonError, jsonOk } from '../_shared/responses.ts';
 
 Deno.serve(async (req: Request): Promise<Response> => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
-  if (req.method !== "POST") {
-    return new Response("Method Not Allowed", { status: 405, headers: corsHeaders });
-  }
+  if (req.method === 'OPTIONS') return handleOptions();
+  if (req.method !== 'POST') return jsonError(405, 'Method Not Allowed');
 
   let speech: string;
   let len: number;
@@ -25,56 +23,44 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const body = await req.json();
     speech = body.speech;
     len = body.len;
-    format = body.format ?? "wav";
+    format = body.format ?? 'wav';
     rate = body.rate ?? 16000;
-    cuid = body.cuid ?? "miaoda-edge-cuid";
-    if (!speech) throw new Error("Missing speech");
-    if (typeof len !== "number" || len <= 0) throw new Error("Missing or invalid len");
+    cuid = body.cuid ?? 'miaoda-edge-cuid';
+    if (!speech) throw new Error('Missing speech');
+    if (typeof len !== 'number' || len <= 0) throw new Error('Missing or invalid len');
   } catch (err) {
-    return new Response(
-      JSON.stringify({ error: `Invalid request: ${(err as Error).message}` }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return jsonError(400, `Invalid request: ${(err as Error).message}`);
   }
 
-  const apiKey = Deno.env.get("INTEGRATIONS_API_KEY");
+  const apiKey = Deno.env.get('INTEGRATIONS_API_KEY');
   if (!apiKey) {
-    return new Response(
-      JSON.stringify({ error: "Server configuration error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return jsonError(500, 'Missing INTEGRATIONS_API_KEY. Run: supabase secrets set INTEGRATIONS_API_KEY=<your-key>');
   }
 
   const upstream = await fetch(
-    "https://app-bhs9a5otro5d-api-Aa2PZnjEw5NL-gateway.appmiaoda.com/server_api",
+    'https://app-bhs9a5otro5d-api-Aa2PZnjEw5NL-gateway.appmiaoda.com/server_api',
     {
-      method: "POST",
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json",
-        "X-Gateway-Authorization": `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'X-Gateway-Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({ format, rate, cuid, speech, len }),
-    }
+    },
   );
 
   if (upstream.status === 429 || upstream.status === 402) {
     const errText = await upstream.text();
     return new Response(errText, {
       status: upstream.status,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { 'Content-Type': 'application/json' },
     });
   }
 
   if (!upstream.ok) {
-    return new Response(
-      JSON.stringify({ error: `Upstream error: ${upstream.status}` }),
-      { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return jsonError(502, `Upstream error: ${upstream.status}`);
   }
 
   const data = await upstream.json();
-  return new Response(JSON.stringify(data), {
-    status: 200,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
-  });
+  return jsonOk(data);
 });

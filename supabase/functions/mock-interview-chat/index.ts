@@ -1,11 +1,17 @@
 /**
  * mock-interview-chat Edge Function
- * 接收面试历史消息，调用文心大模型（思维链追问模式），透传 SSE 流给前端
+ * 接收面试历史消息，调用蓝心大模型（思维链追问模式），透传 SSE 流给前端
+ *
+ * 改造说明（v2）:
+ *   - 接入 vivo 蓝心大模型（OpenAI 兼容协议）
+ *   - 通过 _shared/bluelm.ts 统一调用，CORS / 错误响应统一
+ *   - 无密钥时降级返回固定题库，避免 500
+ *   - 思维链追问改用 thinking.type=enable（Volc-DeepSeek-V3.2）
  */
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+
+import { corsHeaders } from '../_shared/cors.ts';
+import { handleOptions, jsonError } from '../_shared/responses.ts';
+import { chatStream, getBlueLMApiKey, type BlueLMMessage } from '../_shared/bluelm.ts';
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
@@ -48,29 +54,45 @@ function difficultyLabel(d: string) {
   return map[d] ?? '中级';
 }
 
+/** 无密钥时的降级题库 */
+const FALLBACK_QUESTIONS: Record<string, string[]> = {
+  '前端开发': [
+    '【第1题】请解释 React 中的虚拟 DOM，它解决了什么问题？',
+    '【第2题】useEffect 的依赖数组是如何工作的？不传、传空数组、传变量有什么区别？',
+    '【第3题】CSS 中 flexbox 和 grid 布局各自适合什么场景？',
+    '【第4题】什么是闭包？请举一个实际应用的例子。',
+    '【第5题】JavaScript 的事件循环（Event Loop）是如何工作的？宏任务和微任务的区别？',
+  ],
+  '后端开发': [
+    '【第1题】请解释 HTTP/1.1 和 HTTP/2 的主要区别。',
+    '【第2题】什么是 RESTful API？它有哪些约束？',
+    '【第3题】数据库索引的底层原理是什么？为什么用 B+ 树而不是 B 树？',
+    '【第4题】请描述一个分布式事务的解决方案（如两阶段提交、TCC、Saga）。',
+    '【第5题】如何设计一个高并发的限流系统？常见的限流算法有哪些？',
+  ],
+  '算法与数据结构': [
+    '【第1题】请分析快速排序的时间复杂度，最坏情况和平均情况分别是什么？',
+    '【第2题】什么是动态规划？它和贪心算法有什么区别？',
+    '【第3题】请解释红黑树的特性，它相比 AVL 树有什么优势？',
+    '【第4题】如何用 O(n) 时间复杂度找到数组中第 K 大的元素？',
+    '【第5题】什么是并查集？它适合解决什么类型的问题？',
+  ],
+};
+
+const DEFAULT_QUESTIONS = FALLBACK_QUESTIONS['前端开发'];
+
 Deno.serve(async (req: Request): Promise<Response> => {
-  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
-  if (req.method !== 'POST') {
-    return new Response('Method Not Allowed', { status: 405, headers: corsHeaders });
-  }
+  if (req.method === 'OPTIONS') return handleOptions();
+  if (req.method !== 'POST') return jsonError(405, 'Method Not Allowed');
 
   let body: RequestBody;
   try {
     body = await req.json();
   } catch {
-    return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
-      status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return jsonError(400, 'Invalid JSON');
   }
 
   const { messages, direction, difficulty, questionIndex, totalQuestions, followUpRound, isFinish } = body;
-
-  const apiKey = Deno.env.get('INTEGRATIONS_API_KEY');
-  if (!apiKey) {
-    return new Response(JSON.stringify({ error: 'Missing API key' }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
-  }
 
   // 构建系统提示 + 面试上下文
   const systemMsg: Message = {
@@ -102,39 +124,48 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
   }
 
-  const upstream = await fetch(
-    'https://app-bhs9a5otro5d-api-zYkZz8qovQ1L-gateway.appmiaoda.com/v2/chat/completions',
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Gateway-Authorization': `Bearer ${apiKey}`,
+  // 无密钥降级：返回固定题库
+  const apiKey = getBlueLMApiKey();
+  if (!apiKey) {
+    const bank = FALLBACK_QUESTIONS[direction] ?? DEFAULT_QUESTIONS;
+    const questionIdx = Math.min(questionIndex, bank.length - 1);
+    const fallbackContent = isFinish
+      ? '面试已结束，感谢你的参与！请等待评估报告生成。'
+      : bank[questionIdx];
+
+    // 模拟 SSE 流式返回
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const chunk = {
+          choices: [{ delta: { content: fallbackContent, role: 'assistant' }, index: 0 }],
+        };
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
       },
-      body: JSON.stringify({ messages: fullMessages, enable_thinking: false }),
-    }
-  );
+    });
 
-  if (upstream.status === 429 || upstream.status === 402) {
-    const text = await upstream.text();
-    return new Response(text, {
-      status: upstream.status,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    return new Response(stream, {
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
     });
   }
 
-  if (!upstream.ok || !upstream.body) {
-    return new Response(JSON.stringify({ error: `Upstream error: ${upstream.status}` }), {
-      status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
-  }
+  // 调用 BlueLM（流式透传，开启思维链）
+  const bluelmMessages: BlueLMMessage[] = fullMessages.map(m => ({
+    role: m.role,
+    content: m.content,
+  }));
 
-  return new Response(upstream.body, {
-    headers: {
-      ...corsHeaders,
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Content-Type-Options': 'nosniff',
-    },
+  return await chatStream({
+    messages: bluelmMessages,
+    thinking: true,  // 面试追问场景开启思维链
+    temperature: 0.7,
+    max_tokens: 2048,
   });
 });

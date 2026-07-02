@@ -1,12 +1,17 @@
 /**
  * mock-interview-report Edge Function
- * 接收完整对话记录，调用文心大模型生成结构化评估报告（雷达图评分 + 题目点评 + 改进建议）
+ * 接收完整对话记录，调用蓝心大模型生成结构化评估报告（雷达图评分 + 题目点评 + 改进建议）
  * 返回 JSON（非流式）
+ *
+ * 改造说明（v2）:
+ *   - 接入 vivo 蓝心大模型（非流式 chatJSON）
+ *   - 通过 _shared/bluelm.ts 统一调用，CORS / 错误响应统一
+ *   - 关闭思考模式（评估场景需要稳定 JSON 输出）
  */
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+
+import { corsHeaders } from '../_shared/cors.ts';
+import { handleOptions, jsonError, jsonOk } from '../_shared/responses.ts';
+import { chatJSON, getBlueLMApiKey, type BlueLMMessage } from '../_shared/bluelm.ts';
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
@@ -29,7 +34,7 @@ const REPORT_PROMPT = `
 4. 项目与实战经验
 5. 沟通表达能力
 
-## 输出格式（必须是合法 JSON，不含其他文字）
+## 输出格式（必须是合法 JSON，不含其他文字、不含 markdown 代码块）
 {
   "overall_score": <0-100 综合分>,
   "radar_data": [
@@ -58,67 +63,22 @@ const REPORT_PROMPT = `
 }
 `;
 
-async function callLLM(messages: Message[], apiKey: string): Promise<string> {
-  const response = await fetch(
-    'https://app-bhs9a5otro5d-api-zYkZz8qovQ1L-gateway.appmiaoda.com/v2/chat/completions',
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Gateway-Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({ messages, enable_thinking: false }),
-    }
-  );
-
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  if (!response.body) throw new Error('No response body');
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf8');
-  let full = '';
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const raw = line.slice(6).trim();
-      if (raw === '[DONE]') break;
-      try {
-        const chunk = JSON.parse(raw);
-        full += chunk.choices?.[0]?.delta?.content ?? '';
-      } catch { /* skip */ }
-    }
-  }
-  return full;
-}
-
 Deno.serve(async (req: Request): Promise<Response> => {
-  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
-  if (req.method !== 'POST') {
-    return new Response('Method Not Allowed', { status: 405, headers: corsHeaders });
-  }
+  if (req.method === 'OPTIONS') return handleOptions();
+  if (req.method !== 'POST') return jsonError(405, 'Method Not Allowed');
 
   let body: RequestBody;
   try {
     body = await req.json();
   } catch {
-    return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
-      status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return jsonError(400, 'Invalid JSON');
   }
 
   const { messages, direction, difficulty } = body;
-  const apiKey = Deno.env.get('INTEGRATIONS_API_KEY');
+
+  const apiKey = getBlueLMApiKey();
   if (!apiKey) {
-    return new Response(JSON.stringify({ error: 'Missing API key' }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return jsonError(500, 'Missing BLUELM_APP_KEY. Run: supabase secrets set BLUELM_APP_KEY=<your-key>');
   }
 
   const transcript = messages
@@ -126,7 +86,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     .map(m => `${m.role === 'assistant' ? '面试官' : '候选人'}：${m.content}`)
     .join('\n');
 
-  const llmMessages: Message[] = [
+  const llmMessages: BlueLMMessage[] = [
     {
       role: 'system',
       content: `你是技术面试评估专家，正在评估一场 ${direction} 方向的${difficulty === 'junior' ? '初级' : difficulty === 'senior' ? '高级' : '中级'}面试。`,
@@ -138,18 +98,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
   ];
 
   try {
-    const rawText = await callLLM(llmMessages, apiKey);
+    const rawText = await chatJSON({
+      messages: llmMessages,
+      thinking: false,  // 评估场景关闭思考，确保稳定 JSON 输出
+      temperature: 0.3,  // 低温保证稳定性
+      max_tokens: 4096,
+    });
+
     // 提取 JSON（模型可能包裹在 markdown 代码块中）
     const jsonMatch = rawText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('No JSON found in response');
     const report = JSON.parse(jsonMatch[0]);
 
-    return new Response(JSON.stringify({ success: true, report }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return jsonOk({ success: true, report });
   } catch (e) {
-    return new Response(JSON.stringify({ error: `Report generation failed: ${(e as Error).message}` }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return jsonError(500, `Report generation failed: ${(e as Error).message}`);
   }
 });

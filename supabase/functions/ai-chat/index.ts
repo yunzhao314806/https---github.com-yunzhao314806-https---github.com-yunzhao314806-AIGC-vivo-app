@@ -1,96 +1,130 @@
-import { corsHeaders } from '../_shared/cors.ts';
+/**
+ * Edge Function: ai-chat
+ * AI对话 — 优先蓝心大模型，文心 ERNIE 作为 fallback
+ *
+ * 改造说明（v2）:
+ *   - 接入 vivo 蓝心大模型（OpenAI 兼容协议）作为主通道
+ *   - 保留文心 ERNIE 作为 fallback（双轨制，向后兼容）
+ *   - 双通道均无密钥时走 mock 响应
+ *   - 通过 _shared/bluelm.ts 统一调用
+ */
 
-// 文心大模型 AI对话 Edge Function
+import { corsHeaders } from '../_shared/cors.ts';
+import { handleOptions, jsonError, jsonOk } from '../_shared/responses.ts';
+import { chatJSON, getBlueLMApiKey, type BlueLMMessage } from '../_shared/bluelm.ts';
+
+interface Message {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
+
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+  if (req.method === 'OPTIONS') return handleOptions();
+  if (req.method !== 'POST') return jsonError(405, 'Method Not Allowed');
 
   try {
     const { messages } = await req.json();
 
     if (!messages || !Array.isArray(messages)) {
-      return new Response(
-        JSON.stringify({ error: '缺少必要参数: messages' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonError(400, '缺少必要参数: messages');
     }
 
+    const lastUserMsg = messages.filter((m: Message) => m.role === 'user').pop();
+
+    // 通道1：优先尝试蓝心大模型
+    const bluelmKey = getBlueLMApiKey();
+    if (bluelmKey) {
+      try {
+        const bluelmMessages: BlueLMMessage[] = messages.map((m: Message) => ({
+          role: m.role,
+          content: m.content,
+        }));
+
+        const content = await chatJSON({
+          messages: bluelmMessages,
+          thinking: false,
+          temperature: 0.7,
+          max_tokens: 2048,
+        });
+
+        return jsonOk({
+          choices: [{ message: { role: 'assistant', content } }],
+        });
+      } catch (e) {
+        console.warn('BlueLM 调用失败，降级到文心:', (e as Error).message);
+        // 继续走 fallback
+      }
+    }
+
+    // 通道2：文心 ERNIE fallback
     const WENXIN_API_KEY = Deno.env.get('WENXIN_API_KEY');
     const WENXIN_SECRET_KEY = Deno.env.get('WENXIN_SECRET_KEY');
 
-    // 如果没有配置文心API密钥，使用模拟响应
-    if (!WENXIN_API_KEY || !WENXIN_SECRET_KEY) {
-      const lastUserMsg = messages.filter((m: { role: string }) => m.role === 'user').pop();
-      const simulatedResponse = generateMockResponse(lastUserMsg?.content || '');
+    if (WENXIN_API_KEY && WENXIN_SECRET_KEY) {
+      try {
+        // 获取文心 access token
+        const tokenRes = await fetch(
+          `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${WENXIN_API_KEY}&client_secret=${WENXIN_SECRET_KEY}`,
+          { method: 'POST' },
+        );
+        const tokenData = await tokenRes.json();
+        const accessToken = tokenData.access_token;
 
-      return new Response(
-        JSON.stringify({
-          choices: [{ message: { role: 'assistant', content: simulatedResponse } }]
-        }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
+        if (!accessToken) {
+          throw new Error('获取文心API access token失败');
+        }
 
-    // 获取文心access token
-    const tokenRes = await fetch(
-      `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${WENXIN_API_KEY}&client_secret=${WENXIN_SECRET_KEY}`,
-      { method: 'POST' }
-    );
-    const tokenData = await tokenRes.json();
-    const accessToken = tokenData.access_token;
+        // 过滤system消息，文心API不支持system角色
+        const filteredMessages = messages.filter((m: Message) => m.role !== 'system');
+        const systemContent = messages.find((m: Message) => m.role === 'system')?.content || '';
 
-    if (!accessToken) {
-      throw new Error('获取文心API access token失败');
-    }
+        const chatRes = await fetch(
+          `https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions_pro?access_token=${accessToken}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              messages: filteredMessages,
+              system: systemContent,
+              temperature: 0.7,
+              top_p: 0.8,
+            }),
+          },
+        );
 
-    // 过滤system消息，文心API不支持system角色
-    const filteredMessages = messages.filter((m: { role: string }) => m.role !== 'system');
-    const systemContent = messages.find((m: { role: string }) => m.role === 'system')?.content || '';
+        const chatData = await chatRes.json();
 
-    // 调用文心API
-    const chatRes = await fetch(
-      `https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions_pro?access_token=${accessToken}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: filteredMessages,
-          system: systemContent,
-          temperature: 0.7,
-          top_p: 0.8,
-        }),
+        if (chatData.error_code) {
+          throw new Error(`文心API错误: ${chatData.error_msg}`);
+        }
+
+        return jsonOk({
+          choices: [{
+            message: {
+              role: 'assistant',
+              content: chatData.result || '抱歉，我暂时无法回应。',
+            },
+          }],
+        });
+      } catch (e) {
+        console.warn('文心 fallback 也失败，降级到 mock:', (e as Error).message);
+        // 继续走 mock
       }
-    );
-
-    const chatData = await chatRes.json();
-
-    if (chatData.error_code) {
-      throw new Error(`文心API错误: ${chatData.error_msg}`);
     }
 
-    return new Response(
-      JSON.stringify({
-        choices: [{
-          message: {
-            role: 'assistant',
-            content: chatData.result || '抱歉，我暂时无法回应。'
-          }
-        }]
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    // 通道3：mock 响应（双通道均无密钥或失败）
+    const simulatedResponse = generateMockResponse(lastUserMsg?.content || '');
+    return jsonOk({
+      choices: [{ message: { role: 'assistant', content: simulatedResponse } }],
+    });
 
   } catch (error) {
     console.error('AI Chat error:', error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : '服务异常' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return jsonError(500, error instanceof Error ? error.message : '服务异常');
   }
 });
 
-// 模拟AI响应（无API密钥时使用）
+// 模拟AI响应（无任何API密钥可用时使用）
 function generateMockResponse(userMessage: string): string {
   const lowerMsg = userMessage.toLowerCase();
 

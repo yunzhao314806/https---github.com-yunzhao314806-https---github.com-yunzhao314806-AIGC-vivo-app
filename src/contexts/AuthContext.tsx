@@ -154,42 +154,96 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = async (username: string, password: string) => {
     const mockUser = MOCK_USERS[username];
-    if (mockUser && mockUser.password === password) {
-      setUser(mockUser.profile);
-      localStorage.setItem('mock_user', JSON.stringify(mockUser.profile));
-      toast.success('登录成功');
-      return;
-    }
+    const isMockAccount = !!(mockUser && mockUser.password === password);
 
     const storedUsers = JSON.parse(localStorage.getItem('registered_users') || '{}');
-    if (storedUsers[username] && storedUsers[username].password === password) {
-      const profile = storedUsers[username].profile as Profile;
-      setUser(profile);
-      localStorage.setItem('mock_user', JSON.stringify(profile));
-      toast.success('登录成功');
-      return;
-    }
+    const storedUser = storedUsers[username];
+    const isStoredAccount = !!(storedUser && storedUser.password === password);
 
-    const email = `${username}@miaoda.com`;
+    // 统一构造 email，mock 账号和注册账号都尝试真实 auth
+    const email = mockUser
+      ? mockUser.profile.email
+      : storedUser
+        ? storedUser.profile.email
+        : `${username}@miaoda.com`;
+
+    // 优先尝试真实 Supabase auth 登录（拿到 session 后写操作才能通过 RLS）
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) {
-        if (error.message.includes('Invalid login credentials') || error.message.includes('invalid_credentials')) {
-          toast.error('用户名或密码错误，请重新输入');
-        } else if (error.message.includes('Email not confirmed')) {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (!error && data?.user) {
+        // 真实登录成功，等 onAuthStateChange 回调设置 user（会 fetchProfile）
+        toast.success('登录成功');
+        return;
+      }
+      // 真实登录失败，根据错误类型决定是否降级
+      const msg = error?.message || '';
+      const isBackendDown = msg.includes('Service temporarily unavailable')
+        || msg.includes('network')
+        || msg.includes('Failed to fetch')
+        || msg.includes('SupabaseNotReady')
+        || msg.includes('暂停');
+      const isInvalidCreds = msg.includes('Invalid login credentials') || msg.includes('invalid_credentials');
+
+      if (isInvalidCreds && (isMockAccount || isStoredAccount)) {
+        // mock/stored 账号在 Supabase 里不存在 → 自动注册后登录
+        try {
+          const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+            email,
+            password,
+            options: {
+              data: {
+                username,
+                display_name: mockUser?.profile.display_name || storedUser?.profile.display_name || username,
+                user_type: mockUser?.profile.user_type || storedUser?.profile.user_type || 'jobseeker',
+              },
+            },
+          });
+          if (!signUpError && signUpData?.user) {
+            // 注册成功（邮件验证已关闭，直接登录）
+            toast.success('登录成功');
+            return;
+          }
+        } catch {
+          // 注册也失败，走降级
+        }
+      }
+
+      if (!isBackendDown && !isMockAccount && !isStoredAccount) {
+        // 非降级场景且非 mock 账号，真实登录失败要报错
+        if (msg.includes('Email not confirmed')) {
           toast.error('账号邮箱尚未验证，请联系管理员');
-        } else if (error.message.includes('Service temporarily unavailable') || error.message.includes('server') || error.message.includes('network')) {
-          toast.error('后端服务暂时不可用，请使用模拟账号登录');
         } else {
-          toast.error('登录失败：' + error.message);
+          toast.error('用户名或密码错误，请重新输入');
         }
         throw error;
       }
-      toast.success('登录成功');
-    } catch (error) {
-      console.error('登录失败:', error);
-      throw error;
+      // isBackendDown 或 mock/stored 账号 → 继续走降级
+    } catch (authErr) {
+      // 网络异常等情况，mock/stored 账号继续降级；其他账号抛出
+      if (!isMockAccount && !isStoredAccount) {
+        console.error('登录失败:', authErr);
+        throw authErr;
+      }
     }
+
+    // 降级：mock 账号或已注册的本地账号，走 localStorage
+    if (isMockAccount) {
+      setUser(mockUser.profile);
+      localStorage.setItem('mock_user', JSON.stringify(mockUser.profile));
+      toast.success('登录成功（演示模式）');
+      return;
+    }
+    if (isStoredAccount) {
+      const profile = storedUser.profile as Profile;
+      setUser(profile);
+      localStorage.setItem('mock_user', JSON.stringify(profile));
+      toast.success('登录成功（演示模式）');
+      return;
+    }
+
+    // 兜底：既不是 mock 也不是 stored，真实 auth 又失败了
+    toast.error('登录失败，请检查账号或使用演示账号');
+    throw new Error('Login failed');
   };
 
   const register = async (data: RegisterData) => {

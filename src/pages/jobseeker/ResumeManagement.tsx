@@ -208,9 +208,17 @@ export default function ResumeManagement() {
 
   const handleDeleteResume = async (resume: Resume) => {
     try {
-      if (resume.file_url && resume.file_name) {
-        const filePath = `${user!.id}/${resume.id}`;
-        await supabase.storage.from('resumes').remove([filePath]);
+      // 仅当 file_url 是真实 Storage 签名 URL（非 blob: 本地 URL）时才尝试删除文件
+      if (resume.file_url && resume.file_name && !resume.file_url.startsWith('blob:')) {
+        const dirPath = `${user!.id}/${resume.id}`;
+        // 列出该简历目录下所有文件（上传时路径含时间戳，无法直接拼）
+        const { data: files, error: listError } = await supabase.storage
+          .from('resumes')
+          .list(dirPath);
+        if (!listError && files && files.length > 0) {
+          const pathsToRemove = files.map(f => `${dirPath}/${f.name}`);
+          await supabase.storage.from('resumes').remove(pathsToRemove);
+        }
       }
       const { error } = await supabase.from('resumes').delete().eq('id', resume.id);
       if (error) { throw error; }
@@ -218,9 +226,10 @@ export default function ResumeManagement() {
       if (uploadingResumeId === resume.id) setUploadingResumeId(null);
       fetchResumes();
     } catch {
-      toast.success('简历已删除（演示模式）');
+      // 降级：演示模式，直接从本地 state 移除
+      setResumes(prev => prev.filter(r => r.id !== resume.id));
       if (uploadingResumeId === resume.id) setUploadingResumeId(null);
-      fetchResumes();
+      toast.success('简历已删除（演示模式）');
     }
   };
 
